@@ -1,4 +1,7 @@
 mod encryption;
+mod error;
+mod handshake;
+
 pub fn do_it() -> Result<(), Box<dyn std::error::Error>> {
     encryption::poly_proof()?;
     encryption::kjdf_proof()?;
