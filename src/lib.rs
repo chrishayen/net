@@ -3,6 +3,7 @@ pub fn do_it() -> Result<(), Box<dyn std::error::Error>> {
     encryption::poly_proof()?;
     encryption::kjdf_proof()?;
     encryption::x25519_proof()?;
+    encryption::blake2_proof()?;
     Ok(())
 }
 

@@ -6,6 +6,7 @@ use chacha20poly1305::{
 use hex_literal::hex;
 use hkdf::Hkdf;
 
+use blake2::{Blake2b512, Digest};
 use sha2::Sha256;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
@@ -59,6 +60,22 @@ pub fn x25519_proof() -> Result<(), Box<dyn std::error::Error>> {
     let alice_shared_secret = alice_secret.diffie_hellman(&bob_public);
     let bob_shared_secret = bob_secret.diffie_hellman(&alice_public);
     assert_eq!(alice_shared_secret.as_bytes(), bob_shared_secret.as_bytes());
+
+    Ok(())
+}
+
+pub fn blake2_proof() -> Result<(), Box<dyn std::error::Error>> {
+    let hasher = Blake2b512::new();
+
+    // read hash digest and consume hasher
+    let res = hasher.finalize();
+    println!("{:?}", res);
+    assert_eq!(
+        res[..],
+        hex!(
+            "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
+        )[..]
+    );
 
     Ok(())
 }
