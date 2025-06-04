@@ -1,14 +1,14 @@
 # TODO
 
-### [ ] Implement ChaCha20-Poly1305 encryption for packet security (chacha20poly1305 or ring)
+### [x] Implement ChaCha20-Poly1305 encryption for packet security (chacha20poly1305 or ring)
 
 WireGuard encrypts packets using ChaCha20 for confidentiality and Poly1305 for authentication, forming the ChaCha20-Poly1305 AEAD construction. This task implements encryption for HTTP/HTTPS packets sent from your browser to the Nginx server, ensuring they remain confidential and untampered within the tunnel. For your scenario, this protects webpage data (e.g., GET requests or responses) as it travels over UDP (or TCP via relays). The ring crate offers a battle-tested alternative used by boringtun, ensuring high performance and security.
 
 ### [ ] Implement BLAKE2s for hashing in handshake and key derivation (blake2)
 
-BLAKE2s is used in WireGuard’s handshake for generating construction identifiers and integrity checks, ensuring the protocol’s messages are consistent and secure. This task involves hashing handshake data and deriving keys for your browser-Nginx server tunnel. In your scenario, BLAKE2s ensures the handshake between 100.64.1.1 and 100.64.1.2 is secure, preventing man-in-the-middle attacks. The blake2 crate provides a fast, secure implementation critical for reliable tunnel setup.****
+BLAKE2s is used in WireGuard’s handshake for generating construction identifiers and integrity checks, ensuring the protocol’s messages are consistent and secure. This task involves hashing handshake data and deriving keys for your browser-Nginx server tunnel. In your scenario, BLAKE2s ensures the handshake between 100.64.1.1 and 100.64.1.2 is secure, preventing man-in-the-middle attacks. The blake2 crate provides a fast, secure implementation critical for reliable tunnel setup.
 
-### [ ] Implement HKDF for session key derivation (hkdf, sha2)
+### [x] Implement HKDF for session key derivation (hkdf, sha2)
 
 WireGuard uses HKDF (with SHA-256) to derive multiple session keys (for encryption and authentication) from the Curve25519 shared secret. This task ensures that each tunnel session between your browser and Nginx server uses unique, secure keys. In your scenario, HKDF generates keys to encrypt HTTP/HTTPS traffic, maintaining security even if a session is compromised. The hkdf and sha2 crates provide a robust implementation, ensuring reliable key derivation.
 
