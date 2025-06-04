@@ -123,7 +123,7 @@ To maintain performance, Net monitors packet loss and latency, switching to a TC
 
 Your browser’s HTTP/HTTPS traffic to the Nginx server uses TCP, which provides retransmissions and ordering. This task ensures the WireGuard tunnel correctly encapsulates TCP packets without interference. In your scenario, TCP guarantees webpage data delivery to 100.64.1.2, complementing UDP’s tunnel reliability. No additional library is needed, as TCP is handled by the OS.
 
-# 5. User-Friendly Features (Net-like)
+# 5. User-Friendly Features
 
 
 
