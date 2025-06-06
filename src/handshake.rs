@@ -1,4 +1,9 @@
-use chacha20poly1305::aead::{OsRng, rand_core::RngCore};
+use std::{fmt::Error, io::Read};
+
+use chacha20poly1305::{
+    AeadCore, ChaCha20Poly1305, KeyInit, Nonce,
+    aead::{AeadMut, OsRng, rand_core::RngCore},
+};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 
 //
@@ -483,7 +488,41 @@ fn dh_pubkey(private_key: StaticSecret) -> PublicKey {
     PublicKey::from(&private_key)
 }
 
-// AEAD(key, counter, plain text, auth text): ChaCha20Poly1305 AEAD, as specified in RFC7539, with its nonce being composed of 32 bits of zeros followed by the 64-bit little-endian value of counter
+/// AEAD(key, counter, plain text, auth text)
+/// ChaCha20Poly1305 AEAD, as specified in RFC7539,
+/// with its nonce being composed of 32 bits of zeros
+/// followed by the 64-bit little-endian value of counter
+/// a.k.a.
+/// ENCRYPT(k, n, ad, plaintext):
+/// Encrypts plaintext using the cipher
+/// key k of 32 bytes and an 8-byte unsigned integer nonce n which must be
+/// unique for the key k. Returns the ciphertext. Encryption must be done
+/// with an “AEAD” encryption mode with the associated data ad (using the
+/// terminology from [1]) and returns a ciphertext that is the same size as the
+/// plaintext plus 16 bytes for authentication data. The entire ciphertext must
+/// be indistinguishable from random if the key is secret (note that this is an
+/// additional requirement that isn’t necessarily met by all AEAD schemes).
+fn aead(
+    key: SharedSecret,
+    counter: Nonce,
+    plain_text: Vec<u8>,
+    auth_text: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let key = key.as_bytes();
+    let mut cipher = ChaCha20Poly1305::new(key.into());
+    // let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(
+            &counter,
+            chacha20poly1305::aead::Payload {
+                msg: &plain_text,
+                aad: auth_text,
+            },
+        )
+        .unwrap();
+    Ok(ciphertext)
+}
+
 // XAEAD(key, nonce, plain text, auth text): XChaCha20Poly1305 AEAD, with a random 24-byte nonce
 // AEAD_LEN(plain len): plain len + 16
 // HMAC(key, input): HMAC-Blake2s(key, input, 32), returning 32 bytes of output
