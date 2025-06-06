@@ -1,23 +1,10 @@
-use std::{fmt::Error, io::ErrorKind};
-
-// use chacha20poly1305::{
-//     ChaCha20Poly1305, Nonce,
-//     aead::{AeadMut, OsRng, rand_core::RngCore},
-// };
-
-// use hmac::{Hmac, Mac};
-// use sha2::Sha256;
-
-// use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
-
-use blake2::{Blake2s256, Digest};
-
-// type HmacSha256 = Hmac<Sha256>;
+use blake2s_const::{Hash, Params};
 use chacha20poly1305::{
-    ChaCha20Poly1305, Nonce,
-    aead::{Aead, AeadCore, KeyInit, OsRng, rand_core::RngCore},
+    ChaCha20Poly1305, KeyInit, Nonce,
+    aead::{Aead, OsRng, rand_core::RngCore},
 };
 
+use std::fmt::Error;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 //
 // Each party maintains the following variables:
@@ -522,7 +509,7 @@ fn aead(
     nonce[4..12].copy_from_slice(&counter.to_le_bytes());
     let nonce = Nonce::from_slice(&nonce);
 
-    let cipher = ChaCha20Poly1305::new(&key.to_bytes().into());
+    let cipher = <ChaCha20Poly1305 as KeyInit>::new(&key.to_bytes().into());
     let nonce = Nonce::from_slice(&nonce);
     let payload = chacha20poly1305::aead::Payload {
         msg: &plain_text,
@@ -553,14 +540,31 @@ fn xaead(
 // AEAD_LEN(plain len): plain len + 16
 
 /// HASH(input): Blake2s(input, 32), returning 32 bytes of output
-fn hash(input: &[u8]) -> Vec<u8> {
-    let mut hasher = Blake2s256::new();
-    hasher.update(input);
-    hasher.finalize().to_vec()
+fn hash(input: &[u8]) -> Hash {
+    Params::new()
+        .hash_length(32)
+        .to_state()
+        .update(input)
+        .finalize()
 }
 
 /// MAC(key, input): Keyed-Blake2s(key, input, 16), returning 16 bytes of output
-// fn mac(key: &[u8], input: &[u8]) -> Hash {
+fn mac(key: &[u8], input: &[u8]) -> Hash {
+    Params::new()
+        .hash_length(16)
+        .key(key)
+        .to_state()
+        .update(input)
+        .finalize()
+}
+// let mut hasher = <Blake2sMac<U16> as Mac>::new(key.into());
+// hasher.update(input);
+
+// let result = hasher.finalize().into_bytes();
+// println!("MAC output: {:?}", result);
+// println!("MAC length: {}", result.len());
+// result.to_vec()
+// }
 //     Params::new()
 //         .hash_length(16)
 //         .key(key)
@@ -601,13 +605,21 @@ mod tests {
     fn test_hash_output_length() {
         let input = b"hello";
         let hash = hash(input);
-        assert_eq!(hash.len(), 32);
+        assert_eq!(hash.as_bytes().len(), 32);
     }
 
     #[test]
     fn test_hash_256_output() {
         let hash = hash(b"abc");
         let expected = "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982";
-        assert_eq!(base16ct::lower::encode_string(&hash), expected);
+        assert_eq!(base16ct::lower::encode_string(hash.as_bytes()), expected);
+    }
+
+    #[test]
+    fn test_mac_output_length() {
+        let key = b"my secret and secure key";
+        let input = b"input message";
+        let mac = mac(key, input);
+        assert_eq!(16, mac.as_bytes().len());
     }
 }
