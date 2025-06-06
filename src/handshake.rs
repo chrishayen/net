@@ -1,8 +1,11 @@
+use blake2::{Blake2s, Blake2s256, Blake2sMac256, Blake2sVar};
 use blake2s_const::{Hash, Params};
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit, Nonce,
     aead::{Aead, OsRng, rand_core::RngCore},
+    consts::U16,
 };
+use hmac::{Hmac, Mac, SimpleHmac};
 
 use std::fmt::Error;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
@@ -458,6 +461,8 @@ use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 // Noise provides a pre-shared symmetric key or PSK mode to support protocols where
 // both parties have a 32-byte shared secret key.
 
+const CONSTRUCTION: &str = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
+
 /// DH(private key, public key)
 ///
 /// Curve25519 point multiplication of private key and public key,
@@ -552,41 +557,32 @@ fn hash(input: &[u8]) -> Hash {
         .finalize()
 }
 
+/// HMAC(key, input): HMAC-Blake2s(key, input, 32), returning 32 bytes of output
+fn hmac(key: &[u8], input: &[u8]) -> Vec<u8> {
+    let mut mac = <SimpleHmac<Blake2s256> as KeyInit>::new_from_slice(key)
+        .expect("HMAC can take key of any size");
+    mac.update(input);
+    mac.finalize().into_bytes().to_vec()
+}
+
 /// MAC(key, input): Keyed-Blake2s(key, input, 16), returning 16 bytes of output
-fn mac(key: &[u8], input: &[u8]) -> Hash {
+fn mac(key: &[u8], input: &[u8]) -> Vec<u8> {
     Params::new()
         .hash_length(16)
         .key(key)
         .to_state()
         .update(input)
         .finalize()
+        .as_bytes()
+        .to_vec()
 }
-// let mut hasher = <Blake2sMac<U16> as Mac>::new(key.into());
-// hasher.update(input);
 
-// let result = hasher.finalize().into_bytes();
-// println!("MAC output: {:?}", result);
-// println!("MAC length: {}", result.len());
-// result.to_vec()
-// }
-//     Params::new()
-//         .hash_length(16)
-//         .key(key)
-//         .to_state()
-//         .update(input)
-//         .finalize()
-// }
+// fn kdf(key: &[u8], input: &[u8]) -> Vec<u8> {}
 
-// HMAC(key, input): HMAC-Blake2s(key, input, 32), returning 32 bytes of output
-// fn hmac(key: &[u8], input: &[u8]) -> [u8; 32] {
-//     let hash = hash(input);
-//     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC can take key of any size");
-//     mac.update(hash.as_bytes());
-//     mac.finalize().into_bytes().into()
-
-// }
-
-// TAI64N(): TAI64N timestamp of current time which is 12 bytes
+/// TAI64N(): TAI64N timestamp of current time which is 12 bytes
+fn tai64n() -> Vec<u8> {
+    tai64::Tai64N::now().to_bytes().to_vec()
+}
 // CONSTRUCTION: the UTF-8 value Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s, 37 bytes
 // IDENTIFIER: the UTF-8 value WireGuard v1 zx2c4 Jason@zx2c4.com, 34 bytes
 // LABEL_MAC1: the UTF-8 value mac1----, 8 bytes
@@ -624,6 +620,27 @@ mod tests {
         let key = b"my secret and secure key";
         let input = b"input message";
         let mac = mac(key, input);
-        assert_eq!(16, mac.as_bytes().len());
+        assert_eq!(16, mac.len());
+    }
+
+    #[test]
+    fn test_hmac_output_length() {
+        let key = b"my secret and secure key";
+        let input = b"input message";
+        let mac = hmac(key, input);
+        assert_eq!(32, mac.len());
+    }
+
+    #[test]
+    fn test_aead_len() {
+        let plain_text = b"hello";
+        let len = aead_len(plain_text.to_vec());
+        assert_eq!(5 + 16, len);
+    }
+
+    #[test]
+    fn test_tai64n() {
+        let tai64n = tai64n();
+        assert_eq!(12, tai64n.len());
     }
 }

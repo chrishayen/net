@@ -37,6 +37,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "blake2s_const"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -249,6 +258,7 @@ name = "net"
 version = "0.1.0"
 dependencies = [
  "base16ct",
+ "blake2",
  "blake2s_const",
  "byteorder",
  "chacha20poly1305",
@@ -257,6 +267,7 @@ dependencies = [
  "hmac",
  "rand_core 0.9.3",
  "sha2",
+ "tai64",
  "thiserror",
  "x25519-dalek",
 ]
@@ -382,6 +393,12 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "tai64"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "014639506e4f425c78e823eabf56e71c093f940ae55b43e58f682e7bc2f5887a"
 
 [[package]]
 name = "thiserror"
