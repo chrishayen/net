@@ -1,11 +1,24 @@
-use std::{fmt::Error, io::Read};
+use std::{fmt::Error, io::ErrorKind};
 
+// use chacha20poly1305::{
+//     ChaCha20Poly1305, Nonce,
+//     aead::{AeadMut, OsRng, rand_core::RngCore},
+// };
+
+// use hmac::{Hmac, Mac};
+// use sha2::Sha256;
+
+// use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
+
+use blake2::{Blake2s256, Digest};
+
+// type HmacSha256 = Hmac<Sha256>;
 use chacha20poly1305::{
-    AeadCore, ChaCha20Poly1305, KeyInit, Nonce,
-    aead::{AeadMut, OsRng, rand_core::RngCore},
+    ChaCha20Poly1305, Nonce,
+    aead::{Aead, AeadCore, KeyInit, OsRng, rand_core::RngCore},
 };
-use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 
+use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 //
 // Each party maintains the following variables:
 //
@@ -492,44 +505,107 @@ fn dh_pubkey(private_key: StaticSecret) -> PublicKey {
 /// ChaCha20Poly1305 AEAD, as specified in RFC7539,
 /// with its nonce being composed of 32 bits of zeros
 /// followed by the 64-bit little-endian value of counter
-/// a.k.a.
-/// ENCRYPT(k, n, ad, plaintext):
-/// Encrypts plaintext using the cipher
-/// key k of 32 bytes and an 8-byte unsigned integer nonce n which must be
-/// unique for the key k. Returns the ciphertext. Encryption must be done
-/// with an “AEAD” encryption mode with the associated data ad (using the
-/// terminology from [1]) and returns a ciphertext that is the same size as the
-/// plaintext plus 16 bytes for authentication data. The entire ciphertext must
-/// be indistinguishable from random if the key is secret (note that this is an
-/// additional requirement that isn’t necessarily met by all AEAD schemes).
 fn aead(
     key: SharedSecret,
-    counter: Nonce,
+    counter: u64,
     plain_text: Vec<u8>,
     auth_text: &[u8],
-) -> Result<Vec<u8>, Error> {
-    let key = key.as_bytes();
-    let mut cipher = ChaCha20Poly1305::new(key.into());
-    // let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
-    let ciphertext = cipher
-        .encrypt(
-            &counter,
-            chacha20poly1305::aead::Payload {
-                msg: &plain_text,
-                aad: auth_text,
-            },
-        )
-        .unwrap();
-    Ok(ciphertext)
+) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
+    // with its nonce being composed of 32 bits of zeros
+    let mut nonce = [0u8; 12];
+    // followed by the 64-bit little-endian value of counter
+    nonce[4..12].copy_from_slice(&counter.to_le_bytes());
+    let nonce = Nonce::from_slice(&nonce);
+
+    let cipher = ChaCha20Poly1305::new(&key.to_bytes().into());
+    let nonce = Nonce::from_slice(&nonce);
+    let payload = chacha20poly1305::aead::Payload {
+        msg: &plain_text,
+        aad: auth_text,
+    };
+    cipher.encrypt(&nonce, payload)
 }
 
-// XAEAD(key, nonce, plain text, auth text): XChaCha20Poly1305 AEAD, with a random 24-byte nonce
+/// XAEAD(key, nonce, plain text, auth text): XChaCha20Poly1305 AEAD, with a random 24-byte nonce
+// fn xaead(
+//     key: SharedSecret,
+//     // nonce: u64,
+//     plain_text: Vec<u8>,
+//     auth_text: &[u8],
+// ) -> Result<Vec<u8>, Error> {
+//     let r = rand(24);
+//     let nonce = Nonce::from_slice(&r);
+//     let mut cipher = ChaCha20Poly1305::new(key.as_bytes().into());
+
+//     let ciphertext = cipher
+//         .encrypt(
+//             &nonce,
+//             chacha20poly1305::aead::Payload {
+//                 msg: &plain_text,
+//                 aad: auth_text,
+//             },
+//         )
+//         .unwrap();
+//     Ok(ciphertext)
+// }
 // AEAD_LEN(plain len): plain len + 16
+
+/// HASH(input): Blake2s(input, 32), returning 32 bytes of output
+fn hash(input: &[u8]) -> Vec<u8> {
+    let mut hasher = Blake2s256::new();
+    hasher.update(input);
+    hasher.finalize().to_vec()
+}
+
+/// MAC(key, input): Keyed-Blake2s(key, input, 16), returning 16 bytes of output
+// fn mac(key: &[u8], input: &[u8]) -> Hash {
+//     Params::new()
+//         .hash_length(16)
+//         .key(key)
+//         .to_state()
+//         .update(input)
+//         .finalize()
+// }
+
 // HMAC(key, input): HMAC-Blake2s(key, input, 32), returning 32 bytes of output
-// MAC(key, input): Keyed-Blake2s(key, input, 16), returning 16 bytes of output
-// HASH(input): Blake2s(input, 32), returning 32 bytes of output
+// fn hmac(key: &[u8], input: &[u8]) -> [u8; 32] {
+//     let hash = hash(input);
+//     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC can take key of any size");
+//     mac.update(hash.as_bytes());
+//     mac.finalize().into_bytes().into()
+
+// }
+
 // TAI64N(): TAI64N timestamp of current time which is 12 bytes
 // CONSTRUCTION: the UTF-8 value Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s, 37 bytes
 // IDENTIFIER: the UTF-8 value WireGuard v1 zx2c4 Jason@zx2c4.com, 34 bytes
 // LABEL_MAC1: the UTF-8 value mac1----, 8 bytes
 // LABEL_COOKIE: the UTF-8 value cookie--, 8 bytes
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #[test]
+    // fn test_hmac() {
+    //     let key = b"my secret and secure key";
+    //     let input = b"input message";
+    //     let expected = "80f7e22530f9338351af2b18ce77e8ed";
+    //     let hmac = hmac(key, input);
+    //     // assert_eq!(hmac.to_hex().to_ascii_lowercase(), expected);
+    // }
+
+    #[test]
+    fn test_hash_output_length() {
+        let input = b"hello";
+        let hash = hash(input);
+        assert_eq!(hash.len(), 32);
+    }
+
+    #[test]
+    fn test_hash_256_output() {
+        let hash = hash(b"abc");
+        let expected = "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982";
+        assert_eq!(base16ct::lower::encode_string(&hash), expected);
+    }
+}

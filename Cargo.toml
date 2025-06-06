@@ -4,12 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base16ct = { version = "0.2.0", features = ["std"] }
 blake2 = "0.10.6"
-blake2s_simd = "1.0.3"
 byteorder = "1.5.0"
 chacha20poly1305 = "0.10.1"
 hex-literal = "1.0.0"
 hkdf = { version = "0.12.4", features = ["std"] }
+hmac = "0.12.1"
 rand_core = { version = "0.9.3", features = ["std"] }
 sha2 = "0.10.9"
 thiserror = "2.0.12"
