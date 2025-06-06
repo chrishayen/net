@@ -472,6 +472,7 @@ use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 // both parties have a 32-byte shared secret key.
 
 /// DH(private key, public key)
+///
 /// Curve25519 point multiplication of private key and public key,
 /// returning 32 bytes of output
 fn dh(private_key: StaticSecret, public_key: PublicKey) -> SharedSecret {
@@ -479,6 +480,7 @@ fn dh(private_key: StaticSecret, public_key: PublicKey) -> SharedSecret {
 }
 
 /// DH_GENERATE()
+///
 /// generate a random Curve25519 private key
 /// returning 32 bytes of output
 fn dh_generate() -> EphemeralSecret {
@@ -486,6 +488,7 @@ fn dh_generate() -> EphemeralSecret {
 }
 
 /// RAND(len)
+///
 /// return len random bytes of output
 fn rand(len: usize) -> Vec<u8> {
     let mut rng = OsRng;
@@ -495,6 +498,7 @@ fn rand(len: usize) -> Vec<u8> {
 }
 
 /// DH_PUBKEY(private key)
+///
 /// calculate a Curve25519 public key from private key,
 /// returning 32 bytes of output
 fn dh_pubkey(private_key: StaticSecret) -> PublicKey {
@@ -502,6 +506,7 @@ fn dh_pubkey(private_key: StaticSecret) -> PublicKey {
 }
 
 /// AEAD(key, counter, plain text, auth text)
+///
 /// ChaCha20Poly1305 AEAD, as specified in RFC7539,
 /// with its nonce being composed of 32 bits of zeros
 /// followed by the 64-bit little-endian value of counter
@@ -527,27 +532,24 @@ fn aead(
 }
 
 /// XAEAD(key, nonce, plain text, auth text): XChaCha20Poly1305 AEAD, with a random 24-byte nonce
-// fn xaead(
-//     key: SharedSecret,
-//     // nonce: u64,
-//     plain_text: Vec<u8>,
-//     auth_text: &[u8],
-// ) -> Result<Vec<u8>, Error> {
-//     let r = rand(24);
-//     let nonce = Nonce::from_slice(&r);
-//     let mut cipher = ChaCha20Poly1305::new(key.as_bytes().into());
+fn xaead(
+    key: SharedSecret,
+    // nonce: u64,
+    plain_text: Vec<u8>,
+    auth_text: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let r = rand(24);
+    let nonce = Nonce::from_slice(&r);
+    let cipher = ChaCha20Poly1305::new(key.as_bytes().into());
 
-//     let ciphertext = cipher
-//         .encrypt(
-//             &nonce,
-//             chacha20poly1305::aead::Payload {
-//                 msg: &plain_text,
-//                 aad: auth_text,
-//             },
-//         )
-//         .unwrap();
-//     Ok(ciphertext)
-// }
+    let payload = chacha20poly1305::aead::Payload {
+        msg: &plain_text,
+        aad: auth_text,
+    };
+
+    let ciphertext = cipher.encrypt(&nonce, payload).unwrap();
+    Ok(ciphertext)
+}
 // AEAD_LEN(plain len): plain len + 16
 
 /// HASH(input): Blake2s(input, 32), returning 32 bytes of output
