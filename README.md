@@ -4,7 +4,7 @@
 
 WireGuard encrypts packets using ChaCha20 for confidentiality and Poly1305 for authentication, forming the ChaCha20-Poly1305 AEAD construction. This task implements encryption for HTTP/HTTPS packets sent from your browser to the Nginx server, ensuring they remain confidential and untampered within the tunnel. For your scenario, this protects webpage data (e.g., GET requests or responses) as it travels over UDP (or TCP via relays). The ring crate offers a battle-tested alternative used by boringtun, ensuring high performance and security.
 
-### [ ] Implement BLAKE2s for hashing in handshake and key derivation (blake2)
+### [x] Implement BLAKE2s for hashing in handshake and key derivation (blake2)
 
 BLAKE2s is used in WireGuard’s handshake for generating construction identifiers and integrity checks, ensuring the protocol’s messages are consistent and secure. This task involves hashing handshake data and deriving keys for your browser-Nginx server tunnel. In your scenario, BLAKE2s ensures the handshake between 100.64.1.1 and 100.64.1.2 is secure, preventing man-in-the-middle attacks. The blake2 crate provides a fast, secure implementation critical for reliable tunnel setup.
 
@@ -15,9 +15,59 @@ WireGuard uses HKDF (with SHA-256) to derive multiple session keys (for encrypti
 
 
 ### [ ] Implement WireGuard handshake protocol (tokio, x25519-dalek, blake2, hkdf)
+#### Reqs
+        - [ ] static public private key pair w/ curve25519
+        - [ ] Swap static public keys
+        - [ ] Ephemeral public / private key pair
+        - [ ] Initiator timestamp
+        
+### Process
+        - [ ] Initiator generates ephemeral keys
+        - [ ] Computes shared secret w/ private + recipient's public
+        - [ ] Intiator chains shared secret into KDF (hkdf) to derive intermediate keys
+
+#### Initiator sends via udp
+        - A message type identifier (indicating "Initiation").
+        - Its ephemeral public key.
+        - An encrypted payload containing its static public key and a timestamp, encrypted and authenticated using ChaCha20-Poly1305 with keys derived from the shared secret.
+        - A Message Authentication Code (MAC) to verify the integrity of the message, computed using a pre-shared construction key (derived from the peers' static keys).
+#### Responder
+        - The responder receives the initiation message and verifies the MAC to ensure the message's integrity and authenticity.
+        - It extracts the initiator's ephemeral public key and computes the same shared secret using its static private key and the initiator's ephemeral public key: shared_secret = ECDH(responder_static_private, initiator_ephemeral_public).
+        - Using the shared secret, the responder derives the same intermediate keys via HKDF and decrypts the payload to obtain the initiator's static public key and timestamp.
+        - The responder verifies the initiator's static public key against its known list of authorized peers.
+        - It checks the timestamp to ensure the message is not a replay (i.e., the timestamp is recent and not previously used).
+        - If valid, the responder updates its internal state to track this handshake session, associating it with the initiator's identity.
+        - The responder generates its own ephemeral private-public key pair.
+        - It computes a new shared secret using its ephemeral private key and the initiator's ephemeral public key: shared_secret_2 = ECDH(responder_ephemeral_private, initiator_ephemeral_public).
+        - It also computes another shared secret using its ephemeral private key and the initiator's static public key:
+                shared_secret_3 = ECDH(responder_ephemeral_private, initiator_static_public).
+        - These shared secrets, along with the earlier shared secret, are chained into the HKDF to derive final session keys for encryption and authentication.
+        The response includes:
+            - A message type identifier (indicating "Response").
+            - The responder's ephemeral public key.
+            - An encrypted empty payload (to confirm the handshake), encrypted with ChaCha20-Poly1305 using the derived keys.
+            - A MAC to authenticate the message.
+
+        - The responder sends this message back to the initiator over UDP.
+#### Initiator
+        - The initiator receives the response and verifies the MAC.
+        - It extracts the responder's ephemeral public key and computes the same shared secrets:
+            - shared_secret_2 = ECDH(initiator_ephemeral_private, responder_ephemeral_public) and
+            - shared_secret_3 = ECDH(initiator_static_private, responder_ephemeral_public).
+        - Using these, it derives the same session keys via HKDF and decrypts the empty payload to confirm authenticity.
+        - The initiator verifies the responder's identity implicitly through the correct decryption and MAC verification (since only the legitimate responder with the correct static private key could produce a valid response).
+        - The initiator stores the session keys and associates them with the responder for subsequent data communication.
+
+#### Result
+        - Both peers now share two session keys: one for sending data and one for receiving data. These keys are used to encrypt and authenticate data packets using ChaCha20-Poly1305.
+        - Data Transmission: The peers can now send encrypted data packets, each with a counter-based nonce to prevent replays and ensure message ordering.
+        - Forward Secrecy: Since ephemeral keys are used, even if a peer's static private key is later compromised, past sessions remain secure because the ephemeral keys are discarded after the handshake.
+        - Rekeying: WireGuard handshakes are lightweight and typically re-performed every 2 minutes (configurable) to refresh session keys, enhancing security.
+
 
 The WireGuard handshake protocol establishes a secure tunnel between peers via a 1-RTT (round-trip time) exchange, using UDP packets. This task implements the initiator (browser) and responder (Nginx server) roles, handling message formats and retries for lost UDP packets. In your scenario, this ensures the browser can securely connect to 100.64.1.2, even on unreliable networks. Using tokio for async networking and retries enhances reliability, while x25519-dalek, blake2, and hkdf secure the handshake.
-
+    
 
 
 ### [ ] Implement packet encapsulation/decapsulation (chacha20poly1305, tokio)
