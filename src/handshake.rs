@@ -537,7 +537,11 @@ fn xaead(
     let ciphertext = cipher.encrypt(&nonce, payload).unwrap();
     Ok(ciphertext)
 }
-// AEAD_LEN(plain len): plain len + 16
+
+/// AEAD_LEN(plain len): plain len + 16
+fn aead_len(plain_text: Vec<u8>) -> usize {
+    plain_text.len() + 16
+}
 
 /// HASH(input): Blake2s(input, 32), returning 32 bytes of output
 fn hash(input: &[u8]) -> Hash {
