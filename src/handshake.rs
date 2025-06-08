@@ -1,5 +1,6 @@
 use crate::node::{
-    EphemeralKeyPair, EphemeralSecret, PublicKey, SharedSecret, StaticKeyPair, StaticSecret,
+    EphemeralKeyPair, EphemeralSecret, PublicKey, SharedSecret, StaticKeyPair,
+    StaticSecret,
 };
 use blake2::Blake2s256;
 use blake2s_const::{Hash, Params};
@@ -613,7 +614,9 @@ pub fn make_initiate_msg(
     // 3. sender index
     msg.extend_from_slice(rand(4).as_slice());
     // 4. ephemeral public key
-    msg.extend_from_slice(dh_pubkey(initiator_ephemeral_private_key).as_bytes());
+    msg.extend_from_slice(
+        dh_pubkey(initiator_ephemeral_private_key).as_bytes(),
+    );
     // 5. static public key
     // let encrypted_static_public_key = aead(
     //     ,
@@ -647,7 +650,8 @@ mod tests {
     #[test]
     fn test_hash_256_output() {
         let hash = hash(b"abc");
-        let expected = "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982";
+        let expected =
+            "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982";
         assert_eq!(base16ct::lower::encode_string(hash.as_bytes()), expected);
     }
 

@@ -1,14 +1,16 @@
 use chacha20poly1305::aead::OsRng;
-pub use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
+pub use x25519_dalek::{
+    EphemeralSecret, PublicKey, SharedSecret, StaticSecret,
+};
 
 pub struct StaticKeyPair {
-    static_secret: StaticSecret,
-    static_public_key: PublicKey,
+    pub static_secret: StaticSecret,
+    pub static_public_key: PublicKey,
 }
 
 pub struct EphemeralKeyPair {
-    ephemeral_secret: EphemeralSecret,
-    ephemeral_public_key: PublicKey,
+    pub ephemeral_secret: EphemeralSecret,
+    pub ephemeral_public_key: PublicKey,
 }
 
 pub fn make_static_keys() -> StaticKeyPair {
