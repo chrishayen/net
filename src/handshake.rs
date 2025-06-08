@@ -1,14 +1,15 @@
-use blake2::{Blake2s, Blake2s256, Blake2sMac256, Blake2sVar};
+use crate::node::{
+    EphemeralKeyPair, EphemeralSecret, PublicKey, SharedSecret, StaticKeyPair, StaticSecret,
+};
+use blake2::Blake2s256;
 use blake2s_const::{Hash, Params};
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit, Nonce,
     aead::{Aead, OsRng, rand_core::RngCore},
-    consts::U16,
 };
-use hmac::{Hmac, Mac, SimpleHmac};
-
+use hmac::{Mac, SimpleHmac};
 use std::fmt::Error;
-use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
+
 //
 // Each party maintains the following variables:
 //
@@ -461,7 +462,12 @@ use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 // Noise provides a pre-shared symmetric key or PSK mode to support protocols where
 // both parties have a 32-byte shared secret key.
 
-const CONSTRUCTION: &str = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
+const INITIATE_MSG_TYPE: [u8; 1] = [1];
+const INITIATE_RESERVED: [u8; 3] = [0, 0, 0];
+const CONSTRUCTION: &[u8] = b"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
+const IDENTIFIER: &[u8] = b"WireGuard v1 zx2c4 Jason@zx2c4.com";
+const LABEL_MAC1: &[u8] = b"mac1----";
+const LABEL_COOKIE: &[u8] = b"cookie--";
 
 /// DH(private key, public key)
 ///
@@ -493,7 +499,7 @@ fn rand(len: usize) -> Vec<u8> {
 ///
 /// calculate a Curve25519 public key from private key,
 /// returning 32 bytes of output
-fn dh_pubkey(private_key: StaticSecret) -> PublicKey {
+fn dh_pubkey(private_key: EphemeralSecret) -> PublicKey {
     PublicKey::from(&private_key)
 }
 
@@ -587,6 +593,36 @@ fn tai64n() -> Vec<u8> {
 // IDENTIFIER: the UTF-8 value WireGuard v1 zx2c4 Jason@zx2c4.com, 34 bytes
 // LABEL_MAC1: the UTF-8 value mac1----, 8 bytes
 // LABEL_COOKIE: the UTF-8 value cookie--, 8 bytes
+
+pub fn make_initiate_msg(
+    initiator_keys: StaticKeyPair,
+    initiator_ephemeral_keys: EphemeralKeyPair,
+    responder_public_key: PublicKey,
+) {
+    let key = "fuckity";
+    let initiator_chaining_key = hash(CONSTRUCTION);
+    let initiator_ephemeral_private_key = dh_generate();
+    let initiator_static_secret = StaticSecret::random_from_rng(OsRng);
+    let initiator_static_public_key = PublicKey::from(&initiator_static_secret);
+
+    let mut msg = Vec::new();
+    // 1. msg_type
+    msg.extend_from_slice(&INITIATE_MSG_TYPE);
+    // 2. reserved
+    msg.extend_from_slice(&INITIATE_RESERVED);
+    // 3. sender index
+    msg.extend_from_slice(rand(4).as_slice());
+    // 4. ephemeral public key
+    msg.extend_from_slice(dh_pubkey(initiator_ephemeral_private_key).as_bytes());
+    // 5. static public key
+    // let encrypted_static_public_key = aead(
+    //     ,
+    //     0,
+    //     initiator_ephemeral_private_key.as_bytes(),
+    //     IDENTIFIER.as_bytes(),
+    // );
+    // msg.extend_from_slice();
+}
 
 #[cfg(test)]
 mod tests {
