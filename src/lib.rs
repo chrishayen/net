@@ -8,7 +8,7 @@ pub fn make_initiate_msg() -> Vec<u8> {
     let right_keys = node::make_static_keys();
 
     let initiator_msg =
-        handshake::make_correct_initiate_msg(left_keys, right_keys.public);
+        handshake::make_initiate_msg(left_keys, right_keys.public);
     initiator_msg
 }
 

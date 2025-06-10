@@ -1,16 +1,13 @@
 use crate::node::{
-    self, EphemeralKeyPair, EphemeralSecret, PublicKey, SharedSecret,
-    StaticKeyPair, StaticSecret,
+    self, EphemeralSecret, PublicKey, SharedSecret, StaticKeyPair, StaticSecret,
 };
-use blake2::{Blake2s, Blake2s256};
-use blake2s_const::{Hash, Params};
+use blake2::Blake2s256;
+use blake2s_const::Params;
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit, Nonce,
     aead::{Aead, OsRng, rand_core::RngCore},
 };
-use hkdf::{Hkdf, SimpleHkdf};
 use hmac::{Mac, SimpleHmac};
-use sha2::Sha256;
 use std::fmt::Error;
 
 const INITIATE_MSG_TYPE: [u8; 1] = [1];
@@ -22,60 +19,6 @@ const LABEL_COOKIE: &[u8] = b"cookie--";
 const EMPTY_HASH: [u8; 32] = [0; 32];
 
 pub fn make_initiate_msg(
-    initiator_keys: StaticKeyPair,
-    responder_public_key: PublicKey,
-) -> Vec<u8> {
-    let chaining_key = hash(CONSTRUCTION);
-    let msg_hash = hash(b"");
-    let ephemeral = node::make_ephemeral_keys();
-    let psk = [0u8, 4];
-    let h: Vec<u8> = msg_hash
-        .iter()
-        .chain(ephemeral.public.as_bytes())
-        .copied()
-        .collect();
-    let msg_hash = hash(&h);
-
-    let dh = initiator_keys.secret.diffie_hellman(&responder_public_key);
-    let sender_index = rand_le_bytes(4);
-    let hkdf: Hkdf<Sha256> = Hkdf::new(None, &chaining_key);
-    let mut okm = [0u8; 64];
-
-    // Info string can be empty for WireGuard's usage, as per Noise protocol
-    let info = b"";
-
-    // Perform HKDF expand to derive 64 bytes (two 32-byte keys)
-    hkdf.expand(info, &mut okm).expect("HKDF expand failed");
-
-    let mut new_chaining_key = [0u8; 32];
-    let mut aead_key = [0u8; 32];
-    new_chaining_key.copy_from_slice(&okm[0..32]);
-    aead_key.copy_from_slice(&okm[32..64]);
-
-    let plain_text = initiator_keys
-        .public
-        .as_bytes()
-        .iter()
-        .chain(tai64n().iter())
-        .copied()
-        .collect();
-
-    let ciphertext = aead(&aead_key, 0, plain_text, &[]).unwrap();
-
-    let mut msg = Vec::new();
-    msg.extend_from_slice(&INITIATE_MSG_TYPE);
-    msg.extend_from_slice(&INITIATE_RESERVED);
-    msg.extend_from_slice(&sender_index);
-    msg.extend_from_slice(ephemeral.public.as_bytes());
-    msg.extend_from_slice(&ciphertext);
-    let mac_key = hash(responder_public_key.as_bytes());
-    let mac1 = mac(&mac_key, &msg);
-    msg.extend_from_slice(&mac1);
-
-    msg
-}
-
-pub fn make_correct_initiate_msg(
     initiator_keys: StaticKeyPair,
     responder_static_public: PublicKey,
 ) -> Vec<u8> {
@@ -297,16 +240,10 @@ fn mac(key: &[u8], input: &[u8]) -> Vec<u8> {
         .to_vec()
 }
 
-// fn kdf(key: &[u8], input: &[u8]) -> Vec<u8> {}
-
 /// TAI64N(): TAI64N timestamp of current time which is 12 bytes
 fn tai64n() -> Vec<u8> {
     tai64::Tai64N::now().to_bytes().to_vec()
 }
-// CONSTRUCTION: the UTF-8 value Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s, 37 bytes
-// IDENTIFIER: the UTF-8 value WireGuard v1 zx2c4 Jason@zx2c4.com, 34 bytes
-// LABEL_MAC1: the UTF-8 value mac1----, 8 bytes
-// LABEL_COOKIE: the UTF-8 value cookie--, 8 bytes
 
 #[cfg(test)]
 mod tests {
