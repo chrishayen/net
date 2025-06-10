@@ -114,9 +114,9 @@ pub fn make_initiate_msg(
 
     // if (initiator.last_received_cookie is empty or expired)
     //     msg.mac2 = [zeros]
+    msg.extend_from_slice(&[0; 16]);
     // else
     //     msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
-    msg.extend_from_slice(&[0; 16]);
 
     msg
 }
