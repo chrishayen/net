@@ -15,7 +15,7 @@ use std::fmt::Error;
 
 const INITIATE_MSG_TYPE: [u8; 1] = [1];
 const INITIATE_RESERVED: [u8; 3] = [0, 0, 0];
-const PROTOCOL_NAME: &[u8] = b"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
+const CONSTRUCTION: &[u8] = b"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 const IDENTIFIER: &[u8] = b"WireGuard v1 zx2c4 Jason@zx2c4.com";
 const LABEL_MAC1: &[u8] = b"mac1----";
 const LABEL_COOKIE: &[u8] = b"cookie--";
@@ -25,12 +25,11 @@ pub fn make_initiate_msg(
     initiator_keys: StaticKeyPair,
     responder_public_key: PublicKey,
 ) -> Vec<u8> {
-    let chaining_key = hash(PROTOCOL_NAME);
+    let chaining_key = hash(CONSTRUCTION);
     let msg_hash = hash(b"");
     let ephemeral = node::make_ephemeral_keys();
     let psk = [0u8, 4];
     let h: Vec<u8> = msg_hash
-        .as_bytes()
         .iter()
         .chain(ephemeral.public.as_bytes())
         .copied()
@@ -38,7 +37,8 @@ pub fn make_initiate_msg(
     let msg_hash = hash(&h);
 
     let dh = initiator_keys.secret.diffie_hellman(&responder_public_key);
-    let hkdf: Hkdf<Sha256> = Hkdf::new(None, chaining_key.as_bytes());
+    let sender_index = rand_le_bytes(4);
+    let hkdf: Hkdf<Sha256> = Hkdf::new(None, &chaining_key);
     let mut okm = [0u8; 64];
 
     // Info string can be empty for WireGuard's usage, as per Noise protocol
@@ -52,7 +52,123 @@ pub fn make_initiate_msg(
     new_chaining_key.copy_from_slice(&okm[0..32]);
     aead_key.copy_from_slice(&okm[32..64]);
 
-    Vec::new()
+    let plain_text = initiator_keys
+        .public
+        .as_bytes()
+        .iter()
+        .chain(tai64n().iter())
+        .copied()
+        .collect();
+
+    let ciphertext = aead(&aead_key, 0, plain_text, &[]).unwrap();
+
+    let mut msg = Vec::new();
+    msg.extend_from_slice(&INITIATE_MSG_TYPE);
+    msg.extend_from_slice(&INITIATE_RESERVED);
+    msg.extend_from_slice(&sender_index);
+    msg.extend_from_slice(ephemeral.public.as_bytes());
+    msg.extend_from_slice(&ciphertext);
+    let mac_key = hash(responder_public_key.as_bytes());
+    let mac1 = mac(&mac_key, &msg);
+    msg.extend_from_slice(&mac1);
+
+    msg
+}
+
+pub fn make_correct_initiate_msg(
+    initiator_keys: StaticKeyPair,
+    responder_static_public: PublicKey,
+) -> Vec<u8> {
+    // initiator.chaining_key = HASH(CONSTRUCTION)
+    let initiator_chaining_key = hash(CONSTRUCTION);
+
+    // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
+    let part = [&initiator_chaining_key, IDENTIFIER].concat();
+    let part = hash(&part);
+    let part = [part, Vec::from(responder_static_public.as_bytes())].concat();
+    let initiator_hash = hash(&part);
+
+    // initiator.ephemeral_private = DH_GENERATE()
+    let ephemeral = node::make_ephemeral_keys();
+    let initiator_ephemeral_private = ephemeral.secret;
+
+    let mut msg = Vec::new();
+
+    // msg.message_type = 1
+    msg.extend_from_slice(&INITIATE_MSG_TYPE);
+
+    // msg.reserved_zero = { 0, 0, 0 }
+    msg.extend_from_slice(&INITIATE_RESERVED);
+
+    // msg.sender_index = little_endian(initiator.sender_index)
+    let sender_index = rand_le_bytes(4);
+    msg.extend_from_slice(&sender_index);
+
+    // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
+    let unencrypted_ephemeral = ephemeral.public.as_bytes();
+    msg.extend_from_slice(unencrypted_ephemeral);
+
+    // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
+    let part =
+        [initiator_hash, Vec::from(ephemeral.public.as_bytes())].concat();
+    let initiator_hash = hash(&part);
+
+    // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
+    let temp = hmac(&initiator_chaining_key, unencrypted_ephemeral);
+    // initiator.chaining_key = HMAC(temp, 0x1)
+    let initiator_chaining_key = hmac(&temp, &[0x1]);
+
+    // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
+    let secret =
+        initiator_ephemeral_private.diffie_hellman(&responder_static_public);
+    let temp = hmac(&initiator_chaining_key, secret.as_bytes());
+
+    // initiator.chaining_key = HMAC(temp, 0x1)
+    let initiator_chaining_key = hmac(&temp, &[0x1]);
+
+    // key = HMAC(temp, initiator.chaining_key || 0x2)
+    let part = [initiator_chaining_key, vec![0x2]].concat();
+    let key = hmac(&temp, &part);
+
+    // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
+    // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
+
+    // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+    // initiator.chaining_key = HMAC(temp, 0x1)
+    // key = HMAC(temp, initiator.chaining_key || 0x2)
+
+    // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
+    // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
+
+    // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
+    // if (initiator.last_received_cookie is empty or expired)
+    //     msg.mac2 = [zeros]
+    // else
+    //     msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
+
+    // initialize hash and chaining key
+
+    // make ephemeral keys
+
+    // let's build a msg
+    let mut msg: Vec<u8> = Vec::new();
+
+    // first 4 bytes are the msg type and reserved block
+    msg.extend_from_slice(&INITIATE_MSG_TYPE);
+    msg.extend_from_slice(&INITIATE_RESERVED);
+
+    // next 4 bytes are the sender index
+    let sender_index = rand_le_bytes(4);
+    msg.extend_from_slice(&sender_index);
+
+    // next 32 bytes are the unencrypted ephemeral key
+    let ephemeral = node::make_ephemeral_keys();
+    let initiator_hash =
+        hash(&[initiator_hash.as_bytes(), ephemeral.secret].concat());
+
+    let temp = hmac(initiator_chaining_key.as_bytes());
+
+    vec![]
 }
 
 /// DH(private key, public key)
@@ -74,10 +190,13 @@ fn dh_generate() -> EphemeralSecret {
 /// RAND(len)
 ///
 /// return len random bytes of output
-fn rand(len: usize) -> Vec<u8> {
+fn rand_le_bytes(len: usize) -> Vec<u8> {
     let mut rng = OsRng;
     let mut buf = vec![0; len];
-    rng.fill_bytes(&mut buf);
+    while buf.len() < len {
+        buf.extend_from_slice(&rng.next_u32().to_le_bytes());
+    }
+    buf.truncate(len);
     buf
 }
 
@@ -122,7 +241,7 @@ fn xaead(
     plain_text: Vec<u8>,
     auth_text: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let r = rand(24);
+    let r = rand_le_bytes(24);
     let nonce = Nonce::from_slice(&r);
     let cipher = ChaCha20Poly1305::new(key.as_bytes().into());
 
@@ -141,12 +260,14 @@ fn aead_len(plain_text: Vec<u8>) -> usize {
 }
 
 /// HASH(input): Blake2s(input, 32), returning 32 bytes of output
-fn hash(input: &[u8]) -> Hash {
-    Params::new()
+fn hash(input: &[u8]) -> Vec<u8> {
+    let hash = Params::new()
         .hash_length(32)
         .to_state()
         .update(input)
-        .finalize()
+        .finalize();
+
+    hash.as_bytes().to_vec()
 }
 
 /// HMAC(key, input): HMAC-Blake2s(key, input, 32), returning 32 bytes of output
@@ -185,6 +306,17 @@ mod tests {
     use crate::node;
 
     use super::*;
+
+    #[test]
+    fn test_concat() {
+        let construction_len = CONSTRUCTION.len();
+        let identifier_len = IDENTIFIER.len();
+        let concat_len = construction_len + identifier_len;
+        let combined = [CONSTRUCTION, IDENTIFIER].concat();
+        assert_eq!(combined.len(), concat_len);
+        assert_eq!(combined[0..construction_len], *CONSTRUCTION);
+        assert_eq!(combined[construction_len..], *IDENTIFIER);
+    }
 
     #[test]
     fn test_handshake() {
