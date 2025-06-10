@@ -127,48 +127,55 @@ pub fn make_correct_initiate_msg(
     let initiator_chaining_key = hmac(&temp, &[0x1]);
 
     // key = HMAC(temp, initiator.chaining_key || 0x2)
-    let part = [initiator_chaining_key, vec![0x2]].concat();
+    let part = [initiator_chaining_key.clone(), vec![0x2]].concat();
     let key = hmac(&temp, &part);
 
     // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
+    let initiator_static_public = Vec::from(initiator_keys.public.as_bytes());
+    let encrypted_static =
+        aead(&key, 0, initiator_static_public, &initiator_hash).unwrap();
+    msg.extend_from_slice(&encrypted_static);
+
     // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
+    let part = [initiator_hash, encrypted_static].concat();
+    let initiator_hash = hash(&part);
 
     // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+    let part = initiator_keys
+        .secret
+        .diffie_hellman(&responder_static_public);
+    let temp = hmac(&initiator_chaining_key, part.as_bytes());
+
     // initiator.chaining_key = HMAC(temp, 0x1)
+    let initiator_chaining_key = hmac(&temp, &[0x1]);
+
     // key = HMAC(temp, initiator.chaining_key || 0x2)
+    let part = [initiator_chaining_key, vec![0x2]].concat();
+    let key = hmac(&temp, &part);
 
     // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
+    let timestamp = tai64n();
+    let encrypted_timestamp =
+        aead(&key, 0, timestamp, &initiator_hash).unwrap();
+    msg.extend_from_slice(&encrypted_timestamp);
+
     // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
+    let part = [initiator_hash, encrypted_timestamp].concat();
+    let initiator_hash = hash(&part);
 
     // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
+    let part = [LABEL_MAC1, responder_static_public.as_bytes()].concat();
+    let part = hash(&part);
+    let mac1 = mac(&part, &msg);
+    msg.extend_from_slice(&mac1);
+
     // if (initiator.last_received_cookie is empty or expired)
     //     msg.mac2 = [zeros]
     // else
     //     msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
+    msg.extend_from_slice(&[0; 16]);
 
-    // initialize hash and chaining key
-
-    // make ephemeral keys
-
-    // let's build a msg
-    let mut msg: Vec<u8> = Vec::new();
-
-    // first 4 bytes are the msg type and reserved block
-    msg.extend_from_slice(&INITIATE_MSG_TYPE);
-    msg.extend_from_slice(&INITIATE_RESERVED);
-
-    // next 4 bytes are the sender index
-    let sender_index = rand_le_bytes(4);
-    msg.extend_from_slice(&sender_index);
-
-    // next 32 bytes are the unencrypted ephemeral key
-    let ephemeral = node::make_ephemeral_keys();
-    let initiator_hash =
-        hash(&[initiator_hash.as_bytes(), ephemeral.secret].concat());
-
-    let temp = hmac(initiator_chaining_key.as_bytes());
-
-    vec![]
+    msg
 }
 
 /// DH(private key, public key)
@@ -333,7 +340,7 @@ mod tests {
     fn test_hash_output_length() {
         let input = b"hello";
         let hash = hash(input);
-        assert_eq!(hash.as_bytes().len(), 32);
+        assert_eq!(hash.len(), 32);
     }
 
     #[test]
@@ -341,7 +348,7 @@ mod tests {
         let hash = hash(b"abc");
         let expected =
             "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982";
-        assert_eq!(base16ct::lower::encode_string(hash.as_bytes()), expected);
+        assert_eq!(base16ct::lower::encode_string(&hash), expected);
     }
 
     #[test]
