@@ -1,4 +1,4 @@
-use crate::node::{self, PublicKey, StaticKeyPair};
+use crate::node::{EphemeralKeyPair, PublicKey, StaticKeyPair};
 use blake2::Blake2s256;
 use blake2s_const::Params;
 use chacha20poly1305::{
@@ -24,56 +24,43 @@ fn make_initial_chaining_key() -> Vec<u8> {
 /// initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
 fn make_initial_hash(
     chaining_key: &Vec<u8>,
-    static_public_key: &Vec<u8>,
+    static_public_key: &[u8; 32],
 ) -> Vec<u8> {
     let part = [&chaining_key, IDENTIFIER].concat();
     let part = make_hash(&part);
-    let part = [part.as_slice(), static_public_key.as_slice()].concat();
+    let part = [part.as_slice(), static_public_key].concat();
     make_hash(&part)
 }
 
-pub fn make_initiate_msg(
-    initiator_static_keys: StaticKeyPair,
-    responder_static_public: PublicKey,
-) -> Vec<u8> {
-    let chaining_key = make_initial_chaining_key();
+/// msg.message_type = 1
+fn make_message_type() -> [u8; 1] {
+    INITIATE_MSG_TYPE
+}
 
-    let hash = make_initial_hash(
-        &chaining_key,
-        &responder_static_public.as_bytes().to_vec(),
-    );
+/// msg.reserved_zero = { 0, 0, 0 }
+fn make_reserved() -> [u8; 3] {
+    INITIATE_RESERVED
+}
 
-    // initiator.ephemeral_private = DH_GENERATE()
-    let ephemeral = node::make_ephemeral_keys();
-    let initiator_ephemeral_private = ephemeral.secret;
+/// msg.sender_index = little_endian(initiator.sender_index)
+fn make_sender_index() -> [u8; 4] {
+    let mut array = [0u8; 4];
+    rand_le_bytes(4).copy_from_slice(&mut array);
+    array
+}
 
-    let mut msg = Vec::new();
-
-    // msg.message_type = 1
-    msg.extend_from_slice(&INITIATE_MSG_TYPE);
-
-    // msg.reserved_zero = { 0, 0, 0 }
-    msg.extend_from_slice(&INITIATE_RESERVED);
-
-    // msg.sender_index = little_endian(initiator.sender_index)
-    let sender_index = rand_le_bytes(4);
-    msg.extend_from_slice(&sender_index);
-
-    // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
-    let unencrypted_ephemeral = ephemeral.public.as_bytes();
-    msg.extend_from_slice(unencrypted_ephemeral);
-
-    // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
-    let part = [hash, Vec::from(ephemeral.public.as_bytes())].concat();
-    let hash = make_hash(&part);
-
+fn make_payload_aead_key(
+    ephemeral_keys: EphemeralKeyPair,
+    their_static_public: PublicKey,
+    chaining_key: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
     // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
-    let temp = hmac(&chaining_key, unencrypted_ephemeral);
+    let b = ephemeral_keys.public.as_bytes();
+    let temp = hmac(&chaining_key, b);
     let chaining_key = hmac(&temp, &[0x1]);
 
     // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
-    let secret =
-        initiator_ephemeral_private.diffie_hellman(&responder_static_public);
+    let secret = ephemeral_keys.secret.diffie_hellman(&their_static_public);
     let temp = hmac(&chaining_key, secret.as_bytes());
 
     // initiator.chaining_key = HMAC(temp, 0x1)
@@ -82,15 +69,16 @@ pub fn make_initiate_msg(
     // key = HMAC(temp, initiator.chaining_key || 0x2)
     let part = [&chaining_key[..], &[0x2]].concat();
     let key = hmac(&temp, &part);
+    (key, chaining_key)
+}
 
-    // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
-    let initiator_static_public =
-        Vec::from(initiator_static_keys.public.as_bytes());
-
-    let encrypted_static =
-        aead(&key, 0, initiator_static_public, &hash).unwrap();
-    msg.extend_from_slice(&encrypted_static);
-
+fn make_timestamp_aead_key(
+    initiator_static_keys: StaticKeyPair,
+    responder_static_public: PublicKey,
+    encrypted_static: &[u8],
+    chaining_key: &[u8],
+    hash: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
     // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
     let part = [hash, encrypted_static].concat();
     let hash = make_hash(&part);
@@ -107,8 +95,59 @@ pub fn make_initiate_msg(
     // key = HMAC(temp, initiator.chaining_key || 0x2)
     let part = [chaining_key[..].as_ref(), &[0x2]].concat();
     let key = hmac(&temp, &part);
+    (key, hash)
+}
+
+fn make_mac1(responder_static_public: PublicKey, msg: &[u8]) -> Vec<u8> {
+    let part = [LABEL_MAC1, responder_static_public.as_bytes()].concat();
+    let part = make_hash(&part);
+    mac(&part, &msg[..msg.len()])
+}
+
+pub fn make_initiate_msg(
+    initiator_static_keys: StaticKeyPair,
+    initiator_ephemeral_keys: EphemeralKeyPair,
+    responder_static_public: PublicKey,
+) -> Vec<u8> {
+    // set up all the things
+    let chaining_key = make_initial_chaining_key();
+    let unencrypted_ephemeral = initiator_ephemeral_keys.public.as_bytes();
+    let p = initiator_static_keys.public.as_bytes();
+    let initiator_static_public = p.to_vec();
+    let b = responder_static_public.as_bytes();
+    let hash = make_initial_hash(&chaining_key, &b);
+
+    // build our message
+    let mut msg: Vec<u8> = vec![];
+    msg.extend(make_message_type());
+    msg.extend(make_reserved());
+    msg.extend(make_sender_index());
+    msg.extend(unencrypted_ephemeral);
+
+    // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
+    let b = initiator_ephemeral_keys.public.as_bytes();
+    let hash = make_hash(&[hash, b.to_vec()].concat());
+
+    // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
+    let (key, chaining_key) = make_payload_aead_key(
+        initiator_ephemeral_keys,
+        responder_static_public,
+        &chaining_key,
+    );
+
+    let pt = initiator_static_public;
+    let encrypted_static = aead(&key, 0, pt, &hash).unwrap();
+    msg.extend_from_slice(&encrypted_static);
 
     // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
+    let (key, hash) = make_timestamp_aead_key(
+        initiator_static_keys,
+        responder_static_public,
+        &encrypted_static,
+        &chaining_key,
+        &hash,
+    );
+
     let timestamp = tai64n();
     let encrypted_timestamp = aead(&key, 0, timestamp, &hash).unwrap();
     msg.extend_from_slice(&encrypted_timestamp);
@@ -118,10 +157,7 @@ pub fn make_initiate_msg(
     // let hash = hash(&part);
 
     // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
-    let part = [LABEL_MAC1, responder_static_public.as_bytes()].concat();
-    let part = make_hash(&part);
-    let mac1 = mac(&part, &msg[..msg.len()]);
-    msg.extend_from_slice(&mac1);
+    msg.extend_from_slice(&make_mac1(responder_static_public, &msg));
 
     // if (initiator.last_received_cookie is empty or expired)
     //     msg.mac2 = [zeros]
@@ -151,10 +187,8 @@ pub fn verify_initiate_msg(
     let chaining_key = make_initial_chaining_key();
     let responder_static_public = responder_static_keys.public;
 
-    let hash = make_initial_hash(
-        &chaining_key,
-        &responder_static_public.as_bytes().to_vec(),
-    );
+    let hash =
+        make_initial_hash(&chaining_key, &responder_static_public.as_bytes());
 
     let ephemeral_public = msg[8..40].to_vec();
     let part = [hash, Vec::from(ephemeral_public.clone())].concat();
@@ -313,10 +347,12 @@ mod tests {
     #[test]
     fn test_receiver_verify() {
         let left = node::make_static_keys();
+        let left_ephemeral = node::make_ephemeral_keys();
         let right = node::make_static_keys();
         let left_public = left.public;
 
-        let initiator_msg = make_initiate_msg(left, right.public);
+        let initiator_msg =
+            make_initiate_msg(left, left_ephemeral, right.public);
         assert_eq!(
             verify_initiate_msg(initiator_msg, right, left_public),
             true
