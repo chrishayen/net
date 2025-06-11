@@ -268,11 +268,6 @@ fn aead_decrypt(
 //     Ok(ciphertext)
 // }
 
-// AEAD_LEN(plain len): plain len + 16
-// fn aead_len(plain_text: Vec<u8>) -> usize {
-//     plain_text.len() + 16
-// }
-
 /// HASH(input): Blake2s(input, 32), returning 32 bytes of output
 fn make_hash(input: &[u8]) -> Vec<u8> {
     let hash = Params::new()
@@ -369,13 +364,6 @@ mod tests {
         let mac = hmac(key, input);
         assert_eq!(32, mac.len());
     }
-
-    // #[test]
-    // fn test_aead_len() {
-    //     let plain_text = b"hello";
-    //     let len = aead_len(plain_text.to_vec());
-    //     assert_eq!(5 + 16, len);
-    // }
 
     #[test]
     fn test_tai64n() {
