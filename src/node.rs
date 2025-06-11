@@ -1,8 +1,7 @@
 use chacha20poly1305::aead::OsRng;
-pub use x25519_dalek::{
-    EphemeralSecret, PublicKey, SharedSecret, StaticSecret,
-};
+pub use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
+#[derive(Clone)]
 pub struct StaticKeyPair {
     pub secret: StaticSecret,
     pub public: PublicKey,
