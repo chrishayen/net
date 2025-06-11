@@ -70,7 +70,7 @@ pub fn make_initiate_msg(
     let initiator_chaining_key = hmac(&temp, &[0x1]);
 
     // key = HMAC(temp, initiator.chaining_key || 0x2)
-    let part = [initiator_chaining_key.clone(), vec![0x2]].concat();
+    let part = [&initiator_chaining_key[..], &[0x2]].concat();
     let key = hmac(&temp, &part);
 
     // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
@@ -109,7 +109,7 @@ pub fn make_initiate_msg(
     // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
     let part = [LABEL_MAC1, responder_static_public.as_bytes()].concat();
     let part = hash(&part);
-    let mac1 = mac(&part, &msg);
+    let mac1 = mac(&part, &msg[..msg.len()]);
     msg.extend_from_slice(&mac1);
 
     // if (initiator.last_received_cookie is empty or expired)
