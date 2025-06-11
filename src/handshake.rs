@@ -18,29 +18,28 @@ const LABEL_MAC1: &[u8] = b"mac1----";
 
 /// initiator.chaining_key = HASH(CONSTRUCTION)
 fn make_initial_chaining_key() -> Vec<u8> {
-    hash(CONSTRUCTION)
+    make_hash(CONSTRUCTION)
 }
 
 /// initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
 fn make_initial_hash(
-    initiator_chaining_key: &Vec<u8>,
-    responder_static_public_key: &Vec<u8>,
+    chaining_key: &Vec<u8>,
+    static_public_key: &Vec<u8>,
 ) -> Vec<u8> {
-    let part = [&initiator_chaining_key, IDENTIFIER].concat();
-    let part = hash(&part);
-    let part =
-        [part.as_slice(), responder_static_public_key.as_slice()].concat();
-    hash(&part)
+    let part = [&chaining_key, IDENTIFIER].concat();
+    let part = make_hash(&part);
+    let part = [part.as_slice(), static_public_key.as_slice()].concat();
+    make_hash(&part)
 }
 
 pub fn make_initiate_msg(
-    initiator_keys: StaticKeyPair,
+    initiator_static_keys: StaticKeyPair,
     responder_static_public: PublicKey,
 ) -> Vec<u8> {
-    let initiator_chaining_key = make_initial_chaining_key();
+    let chaining_key = make_initial_chaining_key();
 
-    let initiator_hash = make_initial_hash(
-        &initiator_chaining_key,
+    let hash = make_initial_hash(
+        &chaining_key,
         &responder_static_public.as_bytes().to_vec(),
     );
 
@@ -65,63 +64,62 @@ pub fn make_initiate_msg(
     msg.extend_from_slice(unencrypted_ephemeral);
 
     // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
-    let part =
-        [initiator_hash, Vec::from(ephemeral.public.as_bytes())].concat();
-    let initiator_hash = hash(&part);
+    let part = [hash, Vec::from(ephemeral.public.as_bytes())].concat();
+    let hash = make_hash(&part);
 
     // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
-    let temp = hmac(&initiator_chaining_key, unencrypted_ephemeral);
-    // initiator.chaining_key = HMAC(temp, 0x1)
-    let initiator_chaining_key = hmac(&temp, &[0x1]);
+    let temp = hmac(&chaining_key, unencrypted_ephemeral);
+    let chaining_key = hmac(&temp, &[0x1]);
 
     // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
     let secret =
         initiator_ephemeral_private.diffie_hellman(&responder_static_public);
-    let temp = hmac(&initiator_chaining_key, secret.as_bytes());
+    let temp = hmac(&chaining_key, secret.as_bytes());
 
     // initiator.chaining_key = HMAC(temp, 0x1)
-    let initiator_chaining_key = hmac(&temp, &[0x1]);
+    let chaining_key = hmac(&temp, &[0x1]);
 
     // key = HMAC(temp, initiator.chaining_key || 0x2)
-    let part = [&initiator_chaining_key[..], &[0x2]].concat();
+    let part = [&chaining_key[..], &[0x2]].concat();
     let key = hmac(&temp, &part);
 
     // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
-    let initiator_static_public = Vec::from(initiator_keys.public.as_bytes());
+    let initiator_static_public =
+        Vec::from(initiator_static_keys.public.as_bytes());
+
     let encrypted_static =
-        aead(&key, 0, initiator_static_public, &initiator_hash).unwrap();
+        aead(&key, 0, initiator_static_public, &hash).unwrap();
     msg.extend_from_slice(&encrypted_static);
 
     // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
-    let part = [initiator_hash, encrypted_static].concat();
-    let initiator_hash = hash(&part);
+    let part = [hash, encrypted_static].concat();
+    let hash = make_hash(&part);
 
     // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
-    let part = initiator_keys
+    let part = initiator_static_keys
         .secret
         .diffie_hellman(&responder_static_public);
-    let temp = hmac(&initiator_chaining_key, part.as_bytes());
+    let temp = hmac(&chaining_key, part.as_bytes());
 
     // initiator.chaining_key = HMAC(temp, 0x1)
-    let initiator_chaining_key = hmac(&temp, &[0x1]);
+    let chaining_key = hmac(&temp, &[0x1]);
 
     // key = HMAC(temp, initiator.chaining_key || 0x2)
-    let part = [initiator_chaining_key[..].as_ref(), &[0x2]].concat();
+    let part = [chaining_key[..].as_ref(), &[0x2]].concat();
     let key = hmac(&temp, &part);
 
     // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
     let timestamp = tai64n();
-    let encrypted_timestamp =
-        aead(&key, 0, timestamp, &initiator_hash).unwrap();
+    let encrypted_timestamp = aead(&key, 0, timestamp, &hash).unwrap();
     msg.extend_from_slice(&encrypted_timestamp);
 
     // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
-    // let part = [initiator_hash, encrypted_timestamp].concat();
-    // let initiator_hash = hash(&part);
+    // let part = [hash, encrypted_timestamp].concat();
+    // let hash = hash(&part);
 
     // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
     let part = [LABEL_MAC1, responder_static_public.as_bytes()].concat();
-    let part = hash(&part);
+    let part = make_hash(&part);
     let mac1 = mac(&part, &msg[..msg.len()]);
     msg.extend_from_slice(&mac1);
 
@@ -134,48 +132,59 @@ pub fn make_initiate_msg(
     msg
 }
 
-// handshake_initiation {
-//     u8 message_type
-//     u8 reserved_zero[3]
-//     u32 sender_index
-//     u8 unencrypted_ephemeral[32]
-//     u8 encrypted_static[AEAD_LEN(32)]
-//     u8 encrypted_timestamp[AEAD_LEN(12)]
-//     u8 mac1[16]
-//     u8 mac2[16]
-// }
-pub fn verify_initiate_msg(msg: Vec<u8>, receiver_keys: StaticKeyPair) -> bool {
-    // message_type
+/// Does the same operations as make_initiate_msg so that its final state variables are
+/// identical, replacing the operands of the DH function to produce equivalent values.
+/// verifies that the initiator's static public key matches the one in the message
+pub fn verify_initiate_msg(
+    msg: Vec<u8>,
+    responder_static_keys: StaticKeyPair,
+    initiator_static_public: PublicKey,
+) -> bool {
     if msg[0] != 1 {
         return false;
     }
 
-    // reserved_zero
     if msg[1..4] != [0, 0, 0] {
         return false;
     }
 
-    let _unencrypted_ephemeral = msg[8..40].to_vec();
-    let _receiver_keys = receiver_keys;
+    let chaining_key = make_initial_chaining_key();
+    let responder_static_public = responder_static_keys.public;
 
-    false
+    let hash = make_initial_hash(
+        &chaining_key,
+        &responder_static_public.as_bytes().to_vec(),
+    );
+
+    let ephemeral_public = msg[8..40].to_vec();
+    let part = [hash, Vec::from(ephemeral_public.clone())].concat();
+    let hash = make_hash(&part);
+
+    let temp = hmac(&chaining_key, &ephemeral_public);
+    let chaining_key = hmac(&temp, &[0x1]);
+
+    let mut array = [0u8; 32];
+    array.copy_from_slice(&ephemeral_public);
+
+    let ephemeral_public_key = PublicKey::from(array);
+    let secret = responder_static_keys
+        .secret
+        .diffie_hellman(&ephemeral_public_key);
+    let temp = hmac(&chaining_key, secret.as_bytes());
+
+    let chaining_key = hmac(&temp, &[0x1]);
+    let part = [&chaining_key[..], &[0x2]].concat();
+    let key = hmac(&temp, &part);
+
+    let initiator_encrypted_static = msg[40..88].to_vec();
+    let initiator_decrypted_static =
+        aead_decrypt(&key, 0, initiator_encrypted_static, &hash).unwrap();
+
+    let keys_match = initiator_decrypted_static
+        == initiator_static_public.as_bytes().to_vec();
+
+    return keys_match;
 }
-
-// DH(private key, public key)
-//
-// Curve25519 point multiplication of private key and public key,
-// returning 32 bytes of output
-// fn dh(private_key: StaticSecret, public_key: PublicKey) -> SharedSecret {
-//     private_key.diffie_hellman(&public_key)
-// }
-
-// DH_GENERATE()
-//
-// generate a random Curve25519 private key
-// returning 32 bytes of output
-// fn dh_generate() -> EphemeralSecret {
-//     EphemeralSecret::random_from_rng(OsRng)
-// }
 
 /// RAND(len)
 ///
@@ -191,14 +200,6 @@ fn rand_le_bytes(len: usize) -> Vec<u8> {
     buf.truncate(len);
     buf
 }
-
-/// DH_PUBKEY(private key)
-///
-/// calculate a Curve25519 public key from private key,
-/// returning 32 bytes of output
-// fn dh_pubkey(private_key: EphemeralSecret) -> PublicKey {
-//     PublicKey::from(&private_key)
-// }
 
 /// AEAD(key, counter, plain text, auth text)
 ///
@@ -218,12 +219,33 @@ fn aead(
     let nonce = Nonce::from_slice(&nonce);
 
     let cipher = <ChaCha20Poly1305 as KeyInit>::new(key.into());
-    let nonce = Nonce::from_slice(&nonce);
+
     let payload = chacha20poly1305::aead::Payload {
         msg: &plain_text,
         aad: auth_text,
     };
     cipher.encrypt(&nonce, payload)
+}
+
+fn aead_decrypt(
+    key: &[u8],
+    counter: u64,
+    msg: Vec<u8>,
+    auth_text: &[u8],
+) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
+    // with its nonce being composed of 32 bits of zeros
+    let mut nonce = [0u8; 12];
+    // followed by the 64-bit little-endian value of counter
+    nonce[4..12].copy_from_slice(&counter.to_le_bytes());
+    let nonce = Nonce::from_slice(&nonce);
+
+    let cipher = <ChaCha20Poly1305 as KeyInit>::new(key.into());
+
+    let payload = chacha20poly1305::aead::Payload {
+        msg: &msg,
+        aad: auth_text,
+    };
+    cipher.decrypt(&nonce, payload)
 }
 
 // XAEAD(key, nonce, plain text, auth text): XChaCha20Poly1305 AEAD, with a random 24-byte nonce
@@ -252,7 +274,7 @@ fn aead(
 // }
 
 /// HASH(input): Blake2s(input, 32), returning 32 bytes of output
-fn hash(input: &[u8]) -> Vec<u8> {
+fn make_hash(input: &[u8]) -> Vec<u8> {
     let hash = Params::new()
         .hash_length(32)
         .to_state()
@@ -297,9 +319,13 @@ mod tests {
     fn test_receiver_verify() {
         let left = node::make_static_keys();
         let right = node::make_static_keys();
+        let left_public = left.public;
 
         let initiator_msg = make_initiate_msg(left, right.public);
-        assert_eq!(verify_initiate_msg(initiator_msg, right), true);
+        assert_eq!(
+            verify_initiate_msg(initiator_msg, right, left_public),
+            true
+        );
     }
 
     #[test]
@@ -316,13 +342,13 @@ mod tests {
     #[test]
     fn test_hash_output_length() {
         let input = b"hello";
-        let hash = hash(input);
+        let hash = make_hash(input);
         assert_eq!(hash.len(), 32);
     }
 
     #[test]
     fn test_hash_256_output() {
-        let hash = hash(b"abc");
+        let hash = make_hash(b"abc");
         let expected =
             "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982";
         assert_eq!(base16ct::lower::encode_string(&hash), expected);
