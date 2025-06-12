@@ -1,4 +1,7 @@
-use crate::node::{EphemeralKeyPair, PublicKey, StaticKeyPair};
+use crate::{
+    node::{EphemeralKeyPair, PublicKey, StaticKeyPair},
+    types::HandshakeInitiationResponse,
+};
 use blake2::Blake2s256;
 use blake2s_const::Params;
 use chacha20poly1305::{
@@ -18,6 +21,7 @@ const LABEL_MAC1: &[u8] = b"mac1----";
 // const EMPTY_HASH: [u8; 32] = [0; 32];
 
 pub fn make_initiate_msg(
+    initiator_sender_index: [u8; 4],
     initiator_static_keys: StaticKeyPair,
     initiator_ephemeral_keys: EphemeralKeyPair,
     responder_static_public: PublicKey,
@@ -34,7 +38,7 @@ pub fn make_initiate_msg(
     let mut msg: Vec<u8> = vec![];
     msg.extend(make_initiation_message_type());
     msg.extend(make_reserved());
-    msg.extend(make_sender_index());
+    msg.extend(initiator_sender_index);
     msg.extend(unencrypted_ephemeral);
 
     // make the payload aead key
@@ -88,17 +92,20 @@ pub fn make_initiate_msg(
 /// verifies that the initiator's static public key matches the one in the message
 pub fn verify_initiate_msg(
     msg: Vec<u8>,
+    initiator_sender_index: [u8; 4],
+    responder_sender_index: [u8; 4],
     responder_static_keys: StaticKeyPair,
+    responder_ephemeral_keys: EphemeralKeyPair,
     initiator_static_public: PublicKey,
-) -> bool {
+) -> Option<HandshakeInitiationResponse> {
     // verify the message type
     if msg[0] != 1 {
-        return false;
+        return None;
     }
 
     // verify the reserved bytes
     if msg[1..4] != [0, 0, 0] {
-        return false;
+        return None;
     }
 
     // set up the easy stuff
@@ -136,15 +143,35 @@ pub fn verify_initiate_msg(
         aead_decrypt(&key, 0, initiator_encrypted_static, &hash).unwrap();
 
     // verify
-    initiator_decrypted_static == initiator_static_public.as_bytes().to_vec()
+    if initiator_decrypted_static != initiator_static_public.as_bytes().to_vec()
+    {
+        return None;
+    }
+
+    let mut array = [0u8; 32];
+    array.copy_from_slice(&ephemeral_public);
+    let initiator_ephemeral_public = PublicKey::from(array);
+
+    Some(make_initiation_response_msg(
+        responder_static_keys,
+        responder_ephemeral_keys,
+        initiator_static_public,
+        initiator_ephemeral_public,
+        initiator_sender_index,
+        hash,
+        chaining_key,
+    ))
 }
 
 pub fn make_initiation_response_msg(
     responder_static_keys: StaticKeyPair,
     responder_ephemeral_keys: EphemeralKeyPair,
     initiator_static_public: PublicKey,
-    responder_sender_index: [u8; 4],
-) {
+    initiator_ephemeral_public: PublicKey,
+    initiator_sender_index: [u8; 4],
+    hash: Vec<u8>,
+    chaining_key: Vec<u8>,
+) -> HandshakeInitiationResponse {
     let mut msg: Vec<u8> = vec![];
 
     // msg.message_type = 2
@@ -152,36 +179,76 @@ pub fn make_initiation_response_msg(
     // msg.reserved_zero = { 0, 0, 0 }
     msg.extend(make_reserved());
     // msg.sender_index = little_endian(responder.sender_index)
-    msg.extend(responder_sender_index);
+    msg.extend(make_sender_index());
     // msg.receiver_index = little_endian(initiator.sender_index)
-    msg.extend(make_sender_index())
+    msg.extend(initiator_sender_index);
 
     // msg.unencrypted_ephemeral = DH_PUBKEY(responder.ephemeral_private)
+    let b = responder_ephemeral_keys.public.as_bytes();
+    msg.extend(b);
+
     // responder.hash = HASH(responder.hash || msg.unencrypted_ephemeral)
+    let hash = make_hash(&[hash, b.to_vec()].concat());
 
     // temp = HMAC(responder.chaining_key, msg.unencrypted_ephemeral)
+    let temp = hmac(&chaining_key, b);
+
     // responder.chaining_key = HMAC(temp, 0x1)
+    let chaining_key = hmac(&temp, &[0x1]);
 
     // temp = HMAC(responder.chaining_key, DH(responder.ephemeral_private, initiator.ephemeral_public))
+    let p = initiator_ephemeral_public;
+    let secret = responder_ephemeral_keys.secret.diffie_hellman(&p);
+    let temp = hmac(&chaining_key, secret.as_bytes());
+
     // responder.chaining_key = HMAC(temp, 0x1)
+    let chaining_key = hmac(&temp, &[0x1]);
 
     // temp = HMAC(responder.chaining_key, DH(responder.ephemeral_private, initiator.static_public))
+    let p = initiator_static_public;
+    let secret = responder_ephemeral_keys.secret.diffie_hellman(&p);
+    let temp = [chaining_key, secret.as_bytes().to_vec()].concat();
+
     // responder.chaining_key = HMAC(temp, 0x1)
+    let chaining_key = hmac(&temp, &[0x1]);
 
     // temp = HMAC(responder.chaining_key, preshared_key)
+    let temp = hmac(&chaining_key, b"balls");
     // responder.chaining_key = HMAC(temp, 0x1)
+    let chaining_key = hmac(&temp, &[0x1]);
+
     // temp2 = HMAC(temp, responder.chaining_key || 0x2)
+    let temp2 = hmac(&temp, &[chaining_key, [0x2].to_vec()].concat());
+
     // key = HMAC(temp, temp2 || 0x3)
+    let key = hmac(&temp, &[temp2.clone(), [0x3].to_vec()].concat());
+
     // responder.hash = HASH(responder.hash || temp2)
+    let hash = make_hash(&[hash, temp2].concat());
 
     // msg.encrypted_nothing = AEAD(key, 0, [empty], responder.hash)
+    let encrypted_nothing = aead(&key, 0, vec![], &hash).unwrap();
+
     // responder.hash = HASH(responder.hash || msg.encrypted_nothing)
+    let hash = make_hash(&[hash, encrypted_nothing.clone()].concat());
 
     // msg.mac1 = MAC(HASH(LABEL_MAC1 || initiator.static_public), msg[0:offsetof(msg.mac1)])
+
     // if (responder.last_received_cookie is empty or expired)
     //     msg.mac2 = [zeros]
     // else
     //     msg.mac2 = MAC(responder.last_received_cookie, msg[0:offsetof(msg.mac2)])
+
+    HandshakeInitiationResponse {
+        message_type: 2,
+        reserved_zero: [0, 0, 0],
+        sender_index: 0,
+        receiver_index: 0,
+        unencrypted_ephemeral: [0; 32],
+        encrypted_nothing: [0; 16],
+        mac1: [0; 16],
+        mac2: [0; 16],
+    }
 }
 
 /// initiator.chaining_key = HASH(CONSTRUCTION)
@@ -408,6 +475,8 @@ mod tests {
 
     #[test]
     fn test_handshake() {
+        let left_sender_index = [0, 0, 0, 1];
+        let right_sender_index = [0, 0, 0, 2];
         let left = node::make_static_keys();
         let left_ephemeral = node::make_ephemeral_keys();
         let right_ephemeral = node::make_ephemeral_keys();
@@ -415,18 +484,24 @@ mod tests {
         let right_clone = right.clone();
         let left_public = left.public;
 
-        let initiator_msg =
-            make_initiate_msg(left, left_ephemeral, right.public);
-        assert_eq!(
-            verify_initiate_msg(initiator_msg, right, left_public),
-            true
+        let initiator_msg = make_initiate_msg(
+            left_sender_index,
+            left,
+            left_ephemeral,
+            right.public,
         );
 
-        let _responder_msg = make_initiation_response_msg(
-            right_clone,
+        if let Some(responder_msg) = verify_initiate_msg(
+            initiator_msg,
+            left_sender_index,
+            right_sender_index,
+            right,
             right_ephemeral,
             left_public,
-        );
+        ) {
+        } else {
+            assert!(false);
+        }
     }
 
     #[test]

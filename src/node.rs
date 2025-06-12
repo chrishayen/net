@@ -8,7 +8,7 @@ pub struct StaticKeyPair {
 }
 
 pub struct EphemeralKeyPair {
-    pub secret: EphemeralSecret,
+    pub secret: StaticSecret,
     pub public: PublicKey,
 }
 
@@ -22,7 +22,7 @@ pub fn make_static_keys() -> StaticKeyPair {
 }
 
 pub fn make_ephemeral_keys() -> EphemeralKeyPair {
-    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
+    let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
     let ephemeral_public_key = PublicKey::from(&ephemeral_secret);
     EphemeralKeyPair {
         secret: ephemeral_secret,
