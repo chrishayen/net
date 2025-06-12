@@ -97,6 +97,7 @@ pub fn verify_initiate_msg(
     responder_static_keys: StaticKeyPair,
     responder_ephemeral_keys: EphemeralKeyPair,
     initiator_static_public: PublicKey,
+    preshared_key: Vec<u8>,
 ) -> Option<HandshakeInitiationResponse> {
     // verify the message type
     if msg[0] != 1 {
@@ -153,24 +154,24 @@ pub fn verify_initiate_msg(
     let initiator_ephemeral_public = PublicKey::from(array);
 
     Some(make_initiation_response_msg(
-        responder_static_keys,
         responder_ephemeral_keys,
         initiator_static_public,
         initiator_ephemeral_public,
         initiator_sender_index,
         hash,
         chaining_key,
+        preshared_key,
     ))
 }
 
 pub fn make_initiation_response_msg(
-    responder_static_keys: StaticKeyPair,
     responder_ephemeral_keys: EphemeralKeyPair,
     initiator_static_public: PublicKey,
     initiator_ephemeral_public: PublicKey,
     initiator_sender_index: [u8; 4],
     hash: Vec<u8>,
     chaining_key: Vec<u8>,
+    preshared_key: Vec<u8>,
 ) -> HandshakeInitiationResponse {
     let mut msg: Vec<u8> = vec![];
 
@@ -213,7 +214,7 @@ pub fn make_initiation_response_msg(
     let chaining_key = hmac(&temp, &[0x1]);
 
     // temp = HMAC(responder.chaining_key, preshared_key)
-    let temp = hmac(&chaining_key, b"balls");
+    let temp = hmac(&chaining_key, preshared_key.as_slice());
     // responder.chaining_key = HMAC(temp, 0x1)
     let chaining_key = hmac(&temp, &[0x1]);
 
@@ -481,8 +482,9 @@ mod tests {
         let left_ephemeral = node::make_ephemeral_keys();
         let right_ephemeral = node::make_ephemeral_keys();
         let right = node::make_static_keys();
-        let right_clone = right.clone();
+
         let left_public = left.public;
+        let preshared_key = b"balls".to_vec();
 
         let initiator_msg = make_initiate_msg(
             left_sender_index,
@@ -498,6 +500,7 @@ mod tests {
             right,
             right_ephemeral,
             left_public,
+            preshared_key,
         ) {
         } else {
             assert!(false);
