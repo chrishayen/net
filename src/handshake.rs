@@ -8,6 +8,7 @@ use chacha20poly1305::{
 use hmac::{Mac, SimpleHmac};
 
 const INITIATE_MSG_TYPE: [u8; 1] = [1];
+const INITIATE_RESPONSE_MSG_TYPE: [u8; 1] = [2];
 const INITIATE_RESERVED: [u8; 3] = [0, 0, 0];
 const CONSTRUCTION: &[u8] = b"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 const IDENTIFIER: &[u8] = b"WireGuard v1 zx2c4 Jason@zx2c4.com";
@@ -15,99 +16,6 @@ const LABEL_MAC1: &[u8] = b"mac1----";
 
 // const LABEL_COOKIE: &[u8] = b"cookie--";
 // const EMPTY_HASH: [u8; 32] = [0; 32];
-
-/// initiator.chaining_key = HASH(CONSTRUCTION)
-fn make_initial_chaining_key() -> Vec<u8> {
-    make_hash(CONSTRUCTION)
-}
-
-/// initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
-fn make_initial_hash(
-    chaining_key: &Vec<u8>,
-    static_public_key: &[u8; 32],
-) -> Vec<u8> {
-    let part = [&chaining_key, IDENTIFIER].concat();
-    let part = make_hash(&part);
-    let part = [part.as_slice(), static_public_key].concat();
-    make_hash(&part)
-}
-
-/// msg.message_type = 1
-fn make_message_type() -> [u8; 1] {
-    INITIATE_MSG_TYPE
-}
-
-/// msg.reserved_zero = { 0, 0, 0 }
-fn make_reserved() -> [u8; 3] {
-    INITIATE_RESERVED
-}
-
-/// msg.sender_index = little_endian(initiator.sender_index)
-fn make_sender_index() -> [u8; 4] {
-    let mut array = [0u8; 4];
-    rand_le_bytes(4).copy_from_slice(&mut array);
-    array
-}
-
-fn make_payload_aead_key(
-    ephemeral_keys: EphemeralKeyPair,
-    their_static_public: PublicKey,
-    chaining_key: &[u8],
-    hash: &[u8],
-) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
-    let b = ephemeral_keys.public.as_bytes();
-    let hash = make_hash(&[hash, b].concat());
-
-    // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
-    let b = ephemeral_keys.public.as_bytes();
-    let temp = hmac(&chaining_key, b);
-    let chaining_key = hmac(&temp, &[0x1]);
-
-    // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
-    let secret = ephemeral_keys.secret.diffie_hellman(&their_static_public);
-    let temp = hmac(&chaining_key, secret.as_bytes());
-
-    // initiator.chaining_key = HMAC(temp, 0x1)
-    let chaining_key = hmac(&temp, &[0x1]);
-
-    // key = HMAC(temp, initiator.chaining_key || 0x2)
-    let part = [&chaining_key[..], &[0x2]].concat();
-    let key = hmac(&temp, &part);
-    (key, hash, chaining_key)
-}
-
-fn make_timestamp_aead_key(
-    initiator_static_keys: StaticKeyPair,
-    responder_static_public: PublicKey,
-    encrypted_static: &[u8],
-    chaining_key: &[u8],
-    hash: &[u8],
-) -> (Vec<u8>, Vec<u8>) {
-    // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
-    let part = [hash, encrypted_static].concat();
-    let hash = make_hash(&part);
-
-    // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
-    let part = initiator_static_keys
-        .secret
-        .diffie_hellman(&responder_static_public);
-    let temp = hmac(&chaining_key, part.as_bytes());
-
-    // initiator.chaining_key = HMAC(temp, 0x1)
-    let chaining_key = hmac(&temp, &[0x1]);
-
-    // key = HMAC(temp, initiator.chaining_key || 0x2)
-    let part = [chaining_key[..].as_ref(), &[0x2]].concat();
-    let key = hmac(&temp, &part);
-    (key, hash)
-}
-
-fn make_mac1(responder_static_public: PublicKey, msg: &[u8]) -> Vec<u8> {
-    let part = [LABEL_MAC1, responder_static_public.as_bytes()].concat();
-    let part = make_hash(&part);
-    mac(&part, &msg[..msg.len()])
-}
 
 pub fn make_initiate_msg(
     initiator_static_keys: StaticKeyPair,
@@ -124,7 +32,7 @@ pub fn make_initiate_msg(
 
     // set up the easy stuff
     let mut msg: Vec<u8> = vec![];
-    msg.extend(make_message_type());
+    msg.extend(make_initiation_message_type());
     msg.extend(make_reserved());
     msg.extend(make_sender_index());
     msg.extend(unencrypted_ephemeral);
@@ -229,6 +137,149 @@ pub fn verify_initiate_msg(
 
     // verify
     initiator_decrypted_static == initiator_static_public.as_bytes().to_vec()
+}
+
+pub fn make_initiation_response_msg(
+    responder_static_keys: StaticKeyPair,
+    responder_ephemeral_keys: EphemeralKeyPair,
+    initiator_static_public: PublicKey,
+    responder_sender_index: [u8; 4],
+) {
+    let mut msg: Vec<u8> = vec![];
+
+    // msg.message_type = 2
+    msg.extend(make_initiation_response_message_type());
+    // msg.reserved_zero = { 0, 0, 0 }
+    msg.extend(make_reserved());
+    // msg.sender_index = little_endian(responder.sender_index)
+    msg.extend(responder_sender_index);
+    // msg.receiver_index = little_endian(initiator.sender_index)
+    msg.extend(make_sender_index())
+
+    // msg.unencrypted_ephemeral = DH_PUBKEY(responder.ephemeral_private)
+    // responder.hash = HASH(responder.hash || msg.unencrypted_ephemeral)
+
+    // temp = HMAC(responder.chaining_key, msg.unencrypted_ephemeral)
+    // responder.chaining_key = HMAC(temp, 0x1)
+
+    // temp = HMAC(responder.chaining_key, DH(responder.ephemeral_private, initiator.ephemeral_public))
+    // responder.chaining_key = HMAC(temp, 0x1)
+
+    // temp = HMAC(responder.chaining_key, DH(responder.ephemeral_private, initiator.static_public))
+    // responder.chaining_key = HMAC(temp, 0x1)
+
+    // temp = HMAC(responder.chaining_key, preshared_key)
+    // responder.chaining_key = HMAC(temp, 0x1)
+    // temp2 = HMAC(temp, responder.chaining_key || 0x2)
+    // key = HMAC(temp, temp2 || 0x3)
+    // responder.hash = HASH(responder.hash || temp2)
+
+    // msg.encrypted_nothing = AEAD(key, 0, [empty], responder.hash)
+    // responder.hash = HASH(responder.hash || msg.encrypted_nothing)
+
+    // msg.mac1 = MAC(HASH(LABEL_MAC1 || initiator.static_public), msg[0:offsetof(msg.mac1)])
+    // if (responder.last_received_cookie is empty or expired)
+    //     msg.mac2 = [zeros]
+    // else
+    //     msg.mac2 = MAC(responder.last_received_cookie, msg[0:offsetof(msg.mac2)])
+}
+
+/// initiator.chaining_key = HASH(CONSTRUCTION)
+fn make_initial_chaining_key() -> Vec<u8> {
+    make_hash(CONSTRUCTION)
+}
+
+/// initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
+fn make_initial_hash(
+    chaining_key: &Vec<u8>,
+    static_public_key: &[u8; 32],
+) -> Vec<u8> {
+    let part = [&chaining_key, IDENTIFIER].concat();
+    let part = make_hash(&part);
+    let part = [part.as_slice(), static_public_key].concat();
+    make_hash(&part)
+}
+
+/// msg.message_type = 1
+fn make_initiation_message_type() -> [u8; 1] {
+    INITIATE_MSG_TYPE
+}
+
+/// msg.message_type = 2
+fn make_initiation_response_message_type() -> [u8; 1] {
+    INITIATE_RESPONSE_MSG_TYPE
+}
+
+/// msg.reserved_zero = { 0, 0, 0 }
+fn make_reserved() -> [u8; 3] {
+    INITIATE_RESERVED
+}
+
+/// msg.sender_index = little_endian(initiator.sender_index)
+fn make_sender_index() -> [u8; 4] {
+    let mut array = [0u8; 4];
+    rand_le_bytes(4).copy_from_slice(&mut array);
+    array
+}
+
+fn make_payload_aead_key(
+    ephemeral_keys: EphemeralKeyPair,
+    their_static_public: PublicKey,
+    chaining_key: &[u8],
+    hash: &[u8],
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
+    let b = ephemeral_keys.public.as_bytes();
+    let hash = make_hash(&[hash, b].concat());
+
+    // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
+    let b = ephemeral_keys.public.as_bytes();
+    let temp = hmac(&chaining_key, b);
+    let chaining_key = hmac(&temp, &[0x1]);
+
+    // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
+    let secret = ephemeral_keys.secret.diffie_hellman(&their_static_public);
+    let temp = hmac(&chaining_key, secret.as_bytes());
+
+    // initiator.chaining_key = HMAC(temp, 0x1)
+    let chaining_key = hmac(&temp, &[0x1]);
+
+    // key = HMAC(temp, initiator.chaining_key || 0x2)
+    let part = [&chaining_key[..], &[0x2]].concat();
+    let key = hmac(&temp, &part);
+    (key, hash, chaining_key)
+}
+
+fn make_timestamp_aead_key(
+    initiator_static_keys: StaticKeyPair,
+    responder_static_public: PublicKey,
+    encrypted_static: &[u8],
+    chaining_key: &[u8],
+    hash: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
+    // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
+    let part = [hash, encrypted_static].concat();
+    let hash = make_hash(&part);
+
+    // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+    let part = initiator_static_keys
+        .secret
+        .diffie_hellman(&responder_static_public);
+    let temp = hmac(&chaining_key, part.as_bytes());
+
+    // initiator.chaining_key = HMAC(temp, 0x1)
+    let chaining_key = hmac(&temp, &[0x1]);
+
+    // key = HMAC(temp, initiator.chaining_key || 0x2)
+    let part = [chaining_key[..].as_ref(), &[0x2]].concat();
+    let key = hmac(&temp, &part);
+    (key, hash)
+}
+
+fn make_mac1(responder_static_public: PublicKey, msg: &[u8]) -> Vec<u8> {
+    let part = [LABEL_MAC1, responder_static_public.as_bytes()].concat();
+    let part = make_hash(&part);
+    mac(&part, &msg[..msg.len()])
 }
 
 /// RAND(len)
@@ -356,10 +407,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_receiver_verify() {
+    fn test_handshake() {
         let left = node::make_static_keys();
         let left_ephemeral = node::make_ephemeral_keys();
+        let right_ephemeral = node::make_ephemeral_keys();
         let right = node::make_static_keys();
+        let right_clone = right.clone();
         let left_public = left.public;
 
         let initiator_msg =
@@ -367,6 +420,12 @@ mod tests {
         assert_eq!(
             verify_initiate_msg(initiator_msg, right, left_public),
             true
+        );
+
+        let _responder_msg = make_initiation_response_msg(
+            right_clone,
+            right_ephemeral,
+            left_public,
         );
     }
 
