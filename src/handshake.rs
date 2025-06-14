@@ -487,7 +487,7 @@ mod tests {
             right.public,
         );
 
-        if let Some(responder_msg) = verify_initiate_msg(
+        verify_initiate_msg(
             initiator_msg,
             left_sender_index,
             right_sender_index,
@@ -495,10 +495,8 @@ mod tests {
             right_ephemeral,
             left_public,
             preshared_key,
-        ) {
-        } else {
-            assert!(false);
-        }
+        )
+        .unwrap();
     }
 
     #[test]

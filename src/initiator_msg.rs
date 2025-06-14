@@ -1,9 +1,6 @@
-use crate::{
-    handshake::aead,
-    message::{
-        KeyPair, LABEL_MAC1, Public, RESERVED, hmac, initialize_chaining_key,
-        initialize_hash, mac, make_hash, tai64n,
-    },
+use crate::message::{
+    KeyPair, LABEL_MAC1, PublicKey, RESERVED, aead, hmac,
+    initialize_chaining_key, initialize_hash, mac, make_hash, tai64n,
 };
 
 const MESSAGE_TYPE: [u8; 1] = [1];
@@ -13,8 +10,8 @@ pub struct InitiatorMessage {
     pub reserved_zero: [u8; 3],
     pub sender_index: [u8; 4],
     pub unencrypted_ephemeral: [u8; 32],
-    pub encrypted_static: [u8; 32],
-    pub encrypted_timestamp: [u8; 12],
+    pub encrypted_static: [u8; 48],
+    pub encrypted_timestamp: [u8; 28],
     pub mac1: [u8; 16],
     pub mac2: [u8; 16],
 }
@@ -24,21 +21,21 @@ impl InitiatorMessage {
         sender_index: [u8; 4],
         static_keys: KeyPair,
         ephemeral_keys: KeyPair,
-        responder_public: Public,
+        responder_public: PublicKey,
     ) -> Self {
         let chain = initialize_chaining_key();
         let hash = initialize_hash(&chain, &responder_public.to_bytes());
-        let ephemeral_public = ephemeral_keys.public();
-        let initiator_public = static_keys.public().to_vec();
+        let ephemeral_public = ephemeral_keys.public_bytes();
+        let initiator_public = static_keys.public_vec();
 
         //
         // encrypted static
         //
 
-        let hash = make_hash([hash, ephemeral_keys.public().to_vec()].concat());
+        let hash = make_hash([hash, ephemeral_keys.public_vec()].concat());
 
         // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
-        let temp = hmac(&chain, &ephemeral_keys.public());
+        let temp = hmac(&chain, &ephemeral_keys.public_bytes());
         let chaining_key = hmac(&temp, &[0x1]);
 
         // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
@@ -97,8 +94,8 @@ impl InitiatorMessage {
         // return
         //
 
-        let encrypted_static: [u8; 32] = encrypted_static.try_into().unwrap();
-        let encrypted_timestamp: [u8; 12] =
+        let encrypted_static: [u8; 48] = encrypted_static.try_into().unwrap();
+        let encrypted_timestamp: [u8; 28] =
             encrypted_timestamp.try_into().unwrap();
         let mac1: [u8; 16] = mac1.try_into().unwrap();
 
@@ -134,13 +131,13 @@ mod tests {
 
     #[test]
     fn test_to_bytes() {
-        let responder_public = Public::new(DalekPublic::from([0; 32]));
+        let responder_public = PublicKey::from([0; 32]);
 
         let initiator_message = InitiatorMessage::new(
             [0; 4],
             KeyPair::new(),
             KeyPair::new(),
-            responder_keys.public(),
+            responder_public,
         );
 
         let bytes = initiator_message.to_bytes();

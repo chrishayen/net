@@ -3,11 +3,8 @@ use blake2s_const::Params as Blake2s;
 use chacha20poly1305::aead::OsRng;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
 use hmac::{Mac, SimpleHmac};
-pub use x25519_dalek::{
-    PublicKey as DalekPublic, StaticSecret as DalekPrivate,
-};
+pub use x25519_dalek::{PublicKey, StaticSecret};
 
-pub const INITIATE_RESPONSE_MSG_TYPE: [u8; 1] = [2];
 pub const RESERVED: [u8; 3] = [0, 0, 0];
 pub const CONSTRUCTION: &[u8] = b"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 pub const IDENTIFIER: &[u8] = b"WireGuard v1 zx2c4 Jason@zx2c4.com";
@@ -15,57 +12,37 @@ pub const LABEL_MAC1: &[u8] = b"mac1----";
 
 #[derive(Clone)]
 pub struct KeyPair {
-    private: Private,
-    public: Public,
+    pub private: StaticSecret,
+    pub public: PublicKey,
 }
 
 impl KeyPair {
     pub fn new() -> Self {
-        let private = DalekPrivate::random_from_rng(OsRng);
-        let public = DalekPublic::from(&private);
-        let public = Public::new(public);
-        let private = Private::new(private);
+        let private = StaticSecret::random_from_rng(OsRng);
+        let public = PublicKey::from(&private);
 
         KeyPair { private, public }
     }
 
-    pub fn private(&self) -> [u8; 32] {
-        self.private.key.to_bytes()
+    pub fn public_bytes(&self) -> [u8; 32] {
+        self.public.to_bytes()
     }
 
-    pub fn public(&self) -> [u8; 32] {
-        self.public.key.to_bytes()
+    pub fn public_vec(&self) -> Vec<u8> {
+        self.public.to_bytes().to_vec()
     }
 
-    pub fn dh(&self, other: &Public) -> [u8; 32] {
-        let secret = self.private.key.diffie_hellman(&other.key);
+    pub fn private_bytes(&self) -> [u8; 32] {
+        self.private.to_bytes()
+    }
+
+    pub fn private_vec(&self) -> Vec<u8> {
+        self.private.to_bytes().to_vec()
+    }
+
+    pub fn dh(&self, other: &PublicKey) -> [u8; 32] {
+        let secret = self.private.diffie_hellman(&other);
         return secret.to_bytes();
-    }
-}
-
-#[derive(Clone)]
-pub struct Public {
-    key: DalekPublic,
-}
-
-impl Public {
-    pub fn new(key: DalekPublic) -> Self {
-        Self { key }
-    }
-
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.key.to_bytes()
-    }
-}
-
-#[derive(Clone)]
-pub struct Private {
-    key: DalekPrivate,
-}
-
-impl Private {
-    fn new(key: DalekPrivate) -> Self {
-        Self { key }
     }
 }
 
@@ -109,7 +86,7 @@ pub fn hmac(key: &[u8], input: &[u8]) -> Vec<u8> {
 /// ChaCha20Poly1305 AEAD, as specified in RFC7539,
 /// with its nonce being composed of 32 bits of zeros
 /// followed by the 64-bit little-endian value of counter
-fn aead(
+pub fn aead(
     key: &[u8],
     counter: u64,
     plain_text: Vec<u8>,
