@@ -1,13 +1,10 @@
-use crate::{
-    node::{EphemeralKeyPair, PublicKey, StaticKeyPair},
-    types::HandshakeInitiationResponse,
-};
+use crate::node::{EphemeralKeyPair, PublicKey, StaticKeyPair};
 use blake2::Blake2s256;
 use blake2s_const::Params;
-use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit, Nonce,
-    aead::{Aead, OsRng, rand_core::RngCore},
-};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
+
+// use chacha20poly1305::aead::{OsRng, rand_core::RngCore};
+
 use hmac::{Mac, SimpleHmac};
 
 const INITIATE_MSG_TYPE: [u8; 1] = [1];
@@ -98,7 +95,7 @@ pub fn verify_initiate_msg(
     responder_ephemeral_keys: EphemeralKeyPair,
     initiator_static_public: PublicKey,
     preshared_key: Vec<u8>,
-) -> Option<HandshakeInitiationResponse> {
+) -> Option<Vec<u8>> {
     // verify the message type
     if msg[0] != 1 {
         return None;
@@ -158,6 +155,7 @@ pub fn verify_initiate_msg(
         initiator_static_public,
         initiator_ephemeral_public,
         initiator_sender_index,
+        responder_sender_index,
         hash,
         chaining_key,
         preshared_key,
@@ -169,10 +167,11 @@ pub fn make_initiation_response_msg(
     initiator_static_public: PublicKey,
     initiator_ephemeral_public: PublicKey,
     initiator_sender_index: [u8; 4],
+    responder_sender_index: [u8; 4],
     hash: Vec<u8>,
     chaining_key: Vec<u8>,
     preshared_key: Vec<u8>,
-) -> HandshakeInitiationResponse {
+) -> Vec<u8> {
     let mut msg: Vec<u8> = vec![];
 
     // msg.message_type = 2
@@ -180,7 +179,7 @@ pub fn make_initiation_response_msg(
     // msg.reserved_zero = { 0, 0, 0 }
     msg.extend(make_reserved());
     // msg.sender_index = little_endian(responder.sender_index)
-    msg.extend(make_sender_index());
+    msg.extend(responder_sender_index);
     // msg.receiver_index = little_endian(initiator.sender_index)
     msg.extend(initiator_sender_index);
 
@@ -229,27 +228,22 @@ pub fn make_initiation_response_msg(
 
     // msg.encrypted_nothing = AEAD(key, 0, [empty], responder.hash)
     let encrypted_nothing = aead(&key, 0, vec![], &hash).unwrap();
+    msg.extend(&encrypted_nothing);
 
     // responder.hash = HASH(responder.hash || msg.encrypted_nothing)
-    let hash = make_hash(&[hash, encrypted_nothing.clone()].concat());
+    // let hash = make_hash(&[hash, encrypted_nothing.clone()].concat());
 
     // msg.mac1 = MAC(HASH(LABEL_MAC1 || initiator.static_public), msg[0:offsetof(msg.mac1)])
+    let mac1 = make_mac1(initiator_static_public, &msg);
+    msg.extend(&mac1);
 
     // if (responder.last_received_cookie is empty or expired)
     //     msg.mac2 = [zeros]
+    msg.extend_from_slice(&[0; 16]);
     // else
     //     msg.mac2 = MAC(responder.last_received_cookie, msg[0:offsetof(msg.mac2)])
 
-    HandshakeInitiationResponse {
-        message_type: 2,
-        reserved_zero: [0, 0, 0],
-        sender_index: 0,
-        receiver_index: 0,
-        unencrypted_ephemeral: [0; 32],
-        encrypted_nothing: [0; 16],
-        mac1: [0; 16],
-        mac2: [0; 16],
-    }
+    msg
 }
 
 /// initiator.chaining_key = HASH(CONSTRUCTION)
@@ -284,11 +278,11 @@ fn make_reserved() -> [u8; 3] {
 }
 
 /// msg.sender_index = little_endian(initiator.sender_index)
-fn make_sender_index() -> [u8; 4] {
-    let mut array = [0u8; 4];
-    rand_le_bytes(4).copy_from_slice(&mut array);
-    array
-}
+// fn make_sender_index() -> [u8; 4] {
+//     let mut array = [0u8; 4];
+//     rand_le_bytes(4).copy_from_slice(&mut array);
+//     array
+// }
 
 fn make_payload_aead_key(
     ephemeral_keys: EphemeralKeyPair,
@@ -353,24 +347,24 @@ fn make_mac1(responder_static_public: PublicKey, msg: &[u8]) -> Vec<u8> {
 /// RAND(len)
 ///
 /// return len random bytes of output
-fn rand_le_bytes(len: usize) -> Vec<u8> {
-    let mut rng = OsRng;
-    let mut buf = vec![0; len];
+// fn rand_le_bytes(len: usize) -> Vec<u8> {
+//     let mut rng = OsRng;
+//     let mut buf = vec![0; len];
 
-    while buf.len() < len {
-        buf.extend_from_slice(&rng.next_u32().to_le_bytes());
-    }
+//     while buf.len() < len {
+//         buf.extend_from_slice(&rng.next_u32().to_le_bytes());
+//     }
 
-    buf.truncate(len);
-    buf
-}
+//     buf.truncate(len);
+//     buf
+// }
 
 /// AEAD(key, counter, plain text, auth text)
 ///
 /// ChaCha20Poly1305 AEAD, as specified in RFC7539,
 /// with its nonce being composed of 32 bits of zeros
 /// followed by the 64-bit little-endian value of counter
-fn aead(
+pub fn aead(
     key: &[u8],
     counter: u64,
     plain_text: Vec<u8>,
