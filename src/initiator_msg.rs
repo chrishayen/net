@@ -32,6 +32,7 @@ impl InitiatorMessage {
         // encrypted static
         //
 
+        // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
         let hash = make_hash([hash, ephemeral_keys.public_vec()].concat());
 
         // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
@@ -74,11 +75,12 @@ impl InitiatorMessage {
         let encrypted_timestamp = aead(&key, 0, timestamp, &hash).unwrap();
 
         //
-        // mac 1
+        // mac 1 & mac 2
         //
 
-        let key = [LABEL_MAC1, &responder_public.to_bytes()].concat();
-        let key = make_hash(key);
+        // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
+        let key =
+            make_hash([LABEL_MAC1, &responder_public.to_bytes()].concat());
 
         let mut msg: Vec<u8> = vec![];
         msg.extend(MESSAGE_TYPE);
@@ -89,14 +91,14 @@ impl InitiatorMessage {
         msg.extend(&encrypted_timestamp);
 
         let mac1 = mac(&key, &msg[..msg.len()]);
+        let mac2: [u8; 16] = [0; 16];
 
         //
         // return
         //
 
         let encrypted_static: [u8; 48] = encrypted_static.try_into().unwrap();
-        let encrypted_timestamp: [u8; 28] =
-            encrypted_timestamp.try_into().unwrap();
+        let timestamp: [u8; 28] = encrypted_timestamp.try_into().unwrap();
         let mac1: [u8; 16] = mac1.try_into().unwrap();
 
         InitiatorMessage {
@@ -105,9 +107,9 @@ impl InitiatorMessage {
             sender_index: sender_index,
             unencrypted_ephemeral: ephemeral_public,
             encrypted_static: encrypted_static,
-            encrypted_timestamp: encrypted_timestamp,
+            encrypted_timestamp: timestamp,
             mac1: mac1,
-            mac2: [0; 16],
+            mac2: mac2,
         }
     }
 
