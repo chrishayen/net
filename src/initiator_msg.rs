@@ -54,7 +54,7 @@ impl InitiatorMessage {
          *
          * Encrypted timestamp
          *
-         *  initiator.hash = HASH(initiator.hash || msg.encrypted_static)
+         * initiator.hash = HASH(initiator.hash || msg.encrypted_static)
          * temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
          * initiator.chaining_key = HMAC(temp, 0x1)
          * key = HMAC(temp, initiator.chaining_key || 0x2)
