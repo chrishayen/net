@@ -90,7 +90,7 @@ impl InitiatorMessage {
         msg.extend(&encrypted_static);
         msg.extend(&encrypted_timestamp);
 
-        let mac1 = mac(&key, &msg[..msg.len()]);
+        let mac1 = mac(&key, &msg);
         let mac2: [u8; 16] = [0; 16];
 
         /*
