@@ -28,59 +28,59 @@ impl InitiatorMessage {
         let ephemeral_public = ephemeral_keys.public_bytes();
         let initiator_public = static_keys.public_vec();
 
-        //
-        // encrypted static
-        //
+        /*
+         * Encrypted static
+         *
+         * initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
+         * temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
+         * temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
+         * initiator.chaining_key = HMAC(temp, 0x1)
+         * key = HMAC(temp, initiator.chaining_key || 0x2)
+         * msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
+         *
+         */
 
-        // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
         let hash = make_hash([hash, ephemeral_keys.public_vec()].concat());
-
-        // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
         let temp = hmac(&chain, &ephemeral_keys.public_bytes());
         let chaining_key = hmac(&temp, &[0x1]);
-
-        // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
         let secret = ephemeral_keys.dh(&responder_public);
         let temp = hmac(&chaining_key, &secret);
-
-        // initiator.chaining_key = HMAC(temp, 0x1)
         let chaining_key = hmac(&temp, &[0x1]);
-
-        // key = HMAC(temp, initiator.chaining_key || 0x2)
         let part = [&chaining_key[..], &[0x2]].concat();
         let key = hmac(&temp, &part);
-
-        // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
         let encrypted_static = aead(&key, 0, initiator_public, &hash).unwrap();
 
-        //
-        // encrypted timestamp
-        //
+        /*
+         *
+         * Encrypted timestamp
+         *
+         *  initiator.hash = HASH(initiator.hash || msg.encrypted_static)
+         * temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+         * initiator.chaining_key = HMAC(temp, 0x1)
+         * key = HMAC(temp, initiator.chaining_key || 0x2)
+         * msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
+         *
+         */
 
-        // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
-        let hash =
-            make_hash([hash.to_vec(), encrypted_static.to_vec()].concat());
-
-        // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+        let h = [hash.to_vec(), encrypted_static.to_vec()].concat();
+        let hash = make_hash(h);
         let temp = hmac(&chaining_key, &static_keys.dh(&responder_public));
-
-        // initiator.chaining_key = HMAC(temp, 0x1)
         let chaining_key = hmac(&temp, &[0x1]);
-
-        // key = HMAC(temp, initiator.chaining_key || 0x2)
         let key = hmac(&temp, &[chaining_key[..].as_ref(), &[0x2]].concat());
-
-        // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
         let timestamp = tai64n();
         let encrypted_timestamp = aead(&key, 0, timestamp, &hash).unwrap();
 
-        //
-        // mac 1 & mac 2
-        //
+        /*
+         *
+         * Mac 1 and Mac 2
+         *
+         * msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
+         * msg.mac2 = [zeros]
+         *
+         */
 
-        // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
-        let key =
-            make_hash([LABEL_MAC1, &responder_public.to_bytes()].concat());
+        let k = [LABEL_MAC1, &responder_public.to_bytes()].concat();
+        let key = make_hash(k);
 
         let mut msg: Vec<u8> = vec![];
         msg.extend(MESSAGE_TYPE);
@@ -93,9 +93,11 @@ impl InitiatorMessage {
         let mac1 = mac(&key, &msg[..msg.len()]);
         let mac2: [u8; 16] = [0; 16];
 
-        //
-        // return
-        //
+        /*
+         *
+         * Return
+         *
+         */
 
         let encrypted_static: [u8; 48] = encrypted_static.try_into().unwrap();
         let timestamp: [u8; 28] = encrypted_timestamp.try_into().unwrap();
