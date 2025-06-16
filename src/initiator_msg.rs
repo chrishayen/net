@@ -97,7 +97,7 @@ impl InitiatorMessage {
          *
          * Message
          *
-         * msg = handshake_initiation {
+         * handshake_initiation {
          *      u8 message_type
          *      u8 reserved_zero[3]
          *      u32 sender_index
