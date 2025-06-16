@@ -129,7 +129,7 @@ impl InitiatorMessage {
     ///
     /// Returns the hash and chaining key if the message is valid
     ///
-    pub fn verify_initiate_msg(
+    pub fn verify(
         msg: Vec<u8>,
         responder_static_keys: KeyPair,
         initiator_static_public: PublicKey,
@@ -225,7 +225,7 @@ mod tests {
         let bytes = initiator_message.to_bytes();
         assert_eq!(bytes.len(), 148);
 
-        let rs = InitiatorMessage::verify_initiate_msg(
+        let rs = InitiatorMessage::verify(
             bytes,
             responder_keys,
             initiator_keys.public,
