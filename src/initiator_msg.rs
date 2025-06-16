@@ -134,12 +134,6 @@ impl InitiatorMessage {
         let chain = initialize_chaining_key();
         let hash = initialize_hash(&chain, &responder_public);
 
-        /*
-         *
-         * Verify the message
-         *
-         */
-
         // verify the message type
         if msg[0] != 1 {
             return None;
