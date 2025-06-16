@@ -9,6 +9,7 @@ pub const RESERVED: [u8; 3] = [0, 0, 0];
 pub const CONSTRUCTION: &[u8] = b"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 pub const IDENTIFIER: &[u8] = b"WireGuard v1 zx2c4 Jason@zx2c4.com";
 pub const LABEL_MAC1: &[u8] = b"mac1----";
+pub const MAC2_ZERO: [u8; 16] = [0; 16];
 
 #[derive(Clone)]
 pub struct KeyPair {

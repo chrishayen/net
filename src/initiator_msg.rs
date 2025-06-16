@@ -1,6 +1,6 @@
 use crate::message::{
-    KeyPair, LABEL_MAC1, PublicKey, RESERVED, aead, aead_decrypt, hmac,
-    initialize_chaining_key, initialize_hash, mac, make_hash, tai64n,
+    KeyPair, LABEL_MAC1, MAC2_ZERO, PublicKey, RESERVED, aead, aead_decrypt,
+    hmac, initialize_chaining_key, initialize_hash, mac, make_hash, tai64n,
 };
 
 const MESSAGE_TYPE: [u8; 1] = [1];
@@ -71,7 +71,7 @@ impl InitiatorMessage {
 
         /*
          *
-         * Mac 1 and Mac 2
+         * MAC 1 and MAC 2
          *
          * msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
          * msg.mac2 = [zeros]
@@ -90,7 +90,6 @@ impl InitiatorMessage {
         msg.extend(&encrypted_timestamp);
 
         let mac1 = mac(&key, &msg);
-        let mac2: [u8; 16] = [0; 16];
 
         /*
          *
@@ -117,7 +116,7 @@ impl InitiatorMessage {
             encrypted_static: encrypted_static,
             encrypted_timestamp: timestamp,
             mac1: mac1,
-            mac2: mac2,
+            mac2: MAC2_ZERO,
         }
     }
 
