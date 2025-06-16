@@ -123,3 +123,24 @@ pub fn mac(key: &[u8], input: &[u8]) -> Vec<u8> {
         .as_bytes()
         .to_vec()
 }
+
+pub fn aead_decrypt(
+    key: &[u8],
+    counter: u64,
+    msg: Vec<u8>,
+    auth_text: &[u8],
+) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
+    // with its nonce being composed of 32 bits of zeros
+    let mut nonce = [0u8; 12];
+    // followed by the 64-bit little-endian value of counter
+    nonce[4..12].copy_from_slice(&counter.to_le_bytes());
+    let nonce = Nonce::from_slice(&nonce);
+
+    let cipher = <ChaCha20Poly1305 as KeyInit>::new(key.into());
+
+    let payload = chacha20poly1305::aead::Payload {
+        msg: &msg,
+        aad: auth_text,
+    };
+    cipher.decrypt(&nonce, payload)
+}

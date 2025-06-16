@@ -1,5 +1,5 @@
 use crate::message::{
-    KeyPair, LABEL_MAC1, PublicKey, RESERVED, aead, hmac,
+    KeyPair, LABEL_MAC1, PublicKey, RESERVED, aead, aead_decrypt, hmac,
     initialize_chaining_key, initialize_hash, mac, make_hash, tai64n,
 };
 
@@ -42,12 +42,11 @@ impl InitiatorMessage {
 
         let hash = make_hash([hash, ephemeral_keys.public_vec()].concat());
         let temp = hmac(&chain, &ephemeral_keys.public_bytes());
-        let chaining_key = hmac(&temp, &[0x1]);
+        let chain = hmac(&temp, &[0x1]);
         let secret = ephemeral_keys.dh(&responder_public);
-        let temp = hmac(&chaining_key, &secret);
-        let chaining_key = hmac(&temp, &[0x1]);
-        let part = [&chaining_key[..], &[0x2]].concat();
-        let key = hmac(&temp, &part);
+        let temp = hmac(&chain, &secret);
+        let chain = hmac(&temp, &[0x1]);
+        let key = hmac(&temp, &[&chain[..], &[0x2]].concat());
         let encrypted_static = aead(&key, 0, initiator_public, &hash).unwrap();
 
         /*
@@ -62,11 +61,11 @@ impl InitiatorMessage {
          *
          */
 
-        let h = [hash.to_vec(), encrypted_static.to_vec()].concat();
+        let h = make_hash([hash.to_vec(), encrypted_static.to_vec()].concat());
         let hash = make_hash(h);
-        let temp = hmac(&chaining_key, &static_keys.dh(&responder_public));
-        let chaining_key = hmac(&temp, &[0x1]);
-        let key = hmac(&temp, &[chaining_key[..].as_ref(), &[0x2]].concat());
+        let temp = hmac(&chain, &static_keys.dh(&responder_public));
+        let chain = hmac(&temp, &[0x1]);
+        let key = hmac(&temp, &[chain[..].as_ref(), &[0x2]].concat());
         let timestamp = tai64n();
         let encrypted_timestamp = aead(&key, 0, timestamp, &hash).unwrap();
 
@@ -126,6 +125,72 @@ impl InitiatorMessage {
         }
     }
 
+    /// Verify the initiator message
+    ///
+    /// Returns the hash and chaining key if the message is valid
+    ///
+    pub fn verify_initiate_msg(
+        msg: Vec<u8>,
+        responder_static_keys: KeyPair,
+        initiator_static_public: PublicKey,
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        let responder_public = responder_static_keys.public.to_bytes();
+        let chain = initialize_chaining_key();
+        let hash = initialize_hash(&chain, &responder_public);
+
+        /*
+         *
+         * Verify the message
+         *
+         */
+
+        // verify the message type
+        if msg[0] != 1 {
+            return None;
+        }
+
+        // verify the reserved bytes
+        if msg[1..4] != [0, 0, 0] {
+            return None;
+        }
+
+        // update hash
+        let ephemeral_public = msg[8..40].to_vec();
+        let h = [hash, Vec::from(ephemeral_public.clone())].concat();
+        let hash = make_hash(h);
+
+        // update chaining key
+        let temp = hmac(&chain, &ephemeral_public);
+        let chain = hmac(&temp, &[0x1]);
+
+        // get the ephemeral public key from the message
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&ephemeral_public);
+        let p = PublicKey::from(array);
+
+        // make the payload aead key
+        let secret = responder_static_keys.private.diffie_hellman(&p);
+        let temp = hmac(&chain, secret.as_bytes());
+        let chain = hmac(&temp, &[0x1]);
+        let part = [&chain[..], &[0x2]].concat();
+        let key = hmac(&temp, &part);
+
+        // get the encrypted static public key from the message
+        let initiator_encrypted_static = msg[40..88].to_vec();
+
+        // decrypt the static public key
+        let initiator_decrypted_static =
+            aead_decrypt(&key, 0, initiator_encrypted_static, &hash).unwrap();
+
+        if initiator_decrypted_static
+            != initiator_static_public.as_bytes().to_vec()
+        {
+            return None;
+        }
+
+        Some((hash, chain))
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.extend(self.message_type);
@@ -146,16 +211,25 @@ mod tests {
 
     #[test]
     fn test_to_bytes() {
-        let responder_public = PublicKey::from([0; 32]);
+        let initiator_keys = KeyPair::new();
+        let responder_keys = KeyPair::new();
+        let ephemeral_keys = KeyPair::new();
 
         let initiator_message = InitiatorMessage::new(
             [0; 4],
-            KeyPair::new(),
-            KeyPair::new(),
-            responder_public,
+            initiator_keys.clone(),
+            ephemeral_keys,
+            responder_keys.public,
         );
 
         let bytes = initiator_message.to_bytes();
         assert_eq!(bytes.len(), 148);
+
+        let rs = InitiatorMessage::verify_initiate_msg(
+            bytes,
+            responder_keys,
+            initiator_keys.public,
+        );
+        assert!(rs.is_some());
     }
 }
