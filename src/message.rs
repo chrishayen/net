@@ -1,6 +1,7 @@
 use blake2::Blake2s256;
 use blake2s_const::Params as Blake2s;
 use chacha20poly1305::aead::OsRng;
+use chacha20poly1305::aead::rand_core::RngCore;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
 use hmac::{Mac, SimpleHmac};
 pub use x25519_dalek::{PublicKey, StaticSecret};
@@ -144,4 +145,16 @@ pub fn aead_decrypt(
         aad: auth_text,
     };
     cipher.decrypt(&nonce, payload)
+}
+
+pub fn rand_le_bytes(len: usize) -> Vec<u8> {
+    let mut rng = OsRng;
+    let mut buf = vec![0; len];
+
+    while buf.len() < len {
+        buf.extend_from_slice(&rng.next_u32().to_le_bytes());
+    }
+
+    buf.truncate(len);
+    buf
 }

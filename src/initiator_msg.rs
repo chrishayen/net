@@ -6,6 +6,7 @@ use crate::message::{
 const MESSAGE_TYPE: [u8; 1] = [1];
 
 pub struct InitiatorMessage {
+    // message fields
     pub message_type: [u8; 1],
     pub reserved_zero: [u8; 3],
     pub sender_index: [u8; 4],
@@ -14,14 +15,20 @@ pub struct InitiatorMessage {
     pub encrypted_timestamp: [u8; 28],
     pub mac1: [u8; 16],
     pub mac2: [u8; 16],
+
+    // utility fields
+    pub hash: Vec<u8>,
+    pub chain: Vec<u8>,
+    pub static_key: Vec<u8>,
+    pub timestamp_key: Vec<u8>,
 }
 
 impl InitiatorMessage {
     pub fn new(
-        sender_index: [u8; 4],
-        static_keys: KeyPair,
-        ephemeral_keys: KeyPair,
-        responder_public: PublicKey,
+        sender_index: &[u8; 4],
+        static_keys: &KeyPair,
+        ephemeral_keys: &KeyPair,
+        responder_public: &PublicKey,
     ) -> Self {
         let chain = initialize_chaining_key();
         let hash = initialize_hash(&chain, &responder_public.to_bytes());
@@ -40,7 +47,8 @@ impl InitiatorMessage {
          *
          */
 
-        let hash = make_hash([hash, ephemeral_keys.public_vec()].concat());
+        let hash =
+            make_hash([hash.to_vec(), ephemeral_keys.public_vec()].concat());
         let temp = hmac(&chain, &ephemeral_keys.public_bytes());
         let chain = hmac(&temp, &[0x1]);
         let secret = ephemeral_keys.dh(&responder_public);
@@ -48,6 +56,7 @@ impl InitiatorMessage {
         let chain = hmac(&temp, &[0x1]);
         let key = hmac(&temp, &[&chain[..], &[0x2]].concat());
         let encrypted_static = aead(&key, 0, initiator_public, &hash).unwrap();
+        let static_key = key;
 
         /*
          *
@@ -68,6 +77,7 @@ impl InitiatorMessage {
         let key = hmac(&temp, &[chain[..].as_ref(), &[0x2]].concat());
         let timestamp = tai64n();
         let encrypted_timestamp = aead(&key, 0, timestamp, &hash).unwrap();
+        let timestamp_key = key;
 
         /*
          *
@@ -111,13 +121,68 @@ impl InitiatorMessage {
         InitiatorMessage {
             message_type: MESSAGE_TYPE,
             reserved_zero: RESERVED,
-            sender_index: sender_index,
+            sender_index: *sender_index,
             unencrypted_ephemeral: ephemeral_public,
             encrypted_static: encrypted_static,
             encrypted_timestamp: timestamp,
             mac1: mac1,
             mac2: MAC2_ZERO,
+            hash: hash,
+            chain: chain,
+            static_key: static_key,
+            timestamp_key: timestamp_key,
         }
+    }
+
+    pub fn verify_encrypted_static(
+        msg: Vec<u8>,
+        static_key: Vec<u8>,
+        responder_public: PublicKey,
+    ) -> Option<PublicKey> {
+        let encrypted_static = msg[40..88].to_vec();
+        let decrypted_static = aead_decrypt(
+            &static_key,
+            0,
+            encrypted_static,
+            &responder_public.to_bytes(),
+        );
+
+        if decrypted_static.is_err() {
+            return None;
+        }
+
+        let decrypted_static = decrypted_static.unwrap();
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&decrypted_static);
+
+        Some(PublicKey::from(array))
+    }
+
+    pub fn verify_encrypted_timestamp(
+        msg: Vec<u8>,
+        timestamp_key: Vec<u8>,
+        responder_public: PublicKey,
+    ) -> Option<tai64::Tai64N> {
+        let encrypted_timestamp = msg[88..116].to_vec();
+        let decrypted_timestamp = aead_decrypt(
+            &timestamp_key,
+            0,
+            encrypted_timestamp,
+            &responder_public.to_bytes(),
+        );
+
+        if decrypted_timestamp.is_err() {
+            return None;
+        }
+
+        let decrypted_timestamp = decrypted_timestamp.unwrap();
+        let timestamp = tai64::Tai64N::from_slice(&decrypted_timestamp);
+
+        if timestamp.is_err() {
+            return None;
+        }
+
+        Some(timestamp.unwrap())
     }
 
     /// Verify the initiator message
@@ -205,10 +270,10 @@ mod tests {
         let ephemeral_keys = KeyPair::new();
 
         let initiator_message = InitiatorMessage::new(
-            [0; 4],
-            initiator_keys.clone(),
-            ephemeral_keys,
-            responder_keys.public,
+            &[0; 4],
+            &initiator_keys,
+            &ephemeral_keys,
+            &responder_keys.public,
         );
 
         let bytes = initiator_message.to_bytes();

@@ -19,6 +19,7 @@ pub struct ResponderMessage {
 
 impl ResponderMessage {
     pub fn new(
+        initiator_message: Vec<u8>,
         responder_ephemeral_keys: KeyPair,
         initiator_static_public: PublicKey,
         initiator_ephemeral_public: PublicKey,
@@ -53,7 +54,11 @@ impl ResponderMessage {
          *
          */
 
-        let b = responder_ephemeral_keys.public.as_bytes().to_vec();
+        // let unencrypted_ephemeral = initiator_message[8..40].to_vec();
+        let unencrypted_ephemeral: [u8; 32] =
+            initiator_message[8..40].try_into().unwrap();
+
+        let b = unencrypted_ephemeral.to_vec();
         let hash = make_hash([hash, b.clone()].concat());
         let temp = hmac(&chain, &b);
         let chain = hmac(&temp, &[0x1]);
@@ -65,7 +70,7 @@ impl ResponderMessage {
 
         let p = initiator_static_public;
         let secret = responder_ephemeral_keys.private.diffie_hellman(&p);
-        let temp = [chain, secret.as_bytes().to_vec()].concat();
+        let temp = hmac(&chain, secret.as_bytes());
         let chain = hmac(&temp, &[0x1]);
 
         let temp = hmac(&chain, preshared_key.as_slice());
@@ -73,6 +78,8 @@ impl ResponderMessage {
         let temp2 = hmac(&temp, &[chain, [0x2].to_vec()].concat());
         let key = hmac(&temp, &[temp2.clone(), [0x3].to_vec()].concat());
         let hash = make_hash([hash, temp2].concat());
+        println!("encrypt hash: {:?}", hash);
+        println!("encrypt key: {:?}", key);
 
         let encrypted_nothing = aead(&key, 0, vec![], &hash).unwrap();
 
