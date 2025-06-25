@@ -17,7 +17,6 @@ pub struct Handshake {
 impl Handshake {
     pub fn new(static_keys: KeyPair, peer_public: PublicKey) -> Self {
         let ephemeral_keys = KeyPair::new();
-
         let sender_index = Self::make_sender_index();
 
         Self {
@@ -48,12 +47,18 @@ impl Handshake {
         &mut self,
         initiator_message: Vec<u8>,
     ) -> bool {
-        InitiatorMessage::verify(
+        let rs = InitiatorMessage::verify(
             initiator_message,
             self.static_keys.clone(),
             self.peer_public,
-        )
-        .is_some()
+        );
+
+        if rs.is_some() {
+            (self.hash, self.chain) = rs.unwrap();
+            return true;
+        }
+
+        false
     }
 
     fn make_sender_index() -> [u8; 4] {
