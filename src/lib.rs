@@ -5,4 +5,5 @@ mod message;
 pub mod node;
 pub mod responder_msg;
 
+pub mod handshake_too;
 pub mod types;
