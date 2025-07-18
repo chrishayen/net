@@ -39,6 +39,9 @@ pub struct ResponseMessage {
 }
 
 impl WireGuardHandshake {
+    /// Creates a new WireGuard handshake instance with the provided static keypair and sender index.
+    /// This initializes the handshake state machine but doesn't start the actual handshake process.
+    /// The sender index is a unique identifier for this connection attempt.
     pub fn new(static_keys: KeyPair, sender_index: [u8; 4]) -> Self {
         Self {
             static_keys,
@@ -51,6 +54,13 @@ impl WireGuardHandshake {
         }
     }
 
+    /// Creates the first message in the WireGuard handshake (initiator -> responder).
+    /// This implements the noise protocol's first handshake message, performing:
+    /// 1. Generation of ephemeral keypair for this handshake
+    /// 2. Two Diffie-Hellman operations for forward secrecy
+    /// 3. Encryption of our static public key and current timestamp
+    /// 4. Authentication via MAC1 calculation
+    /// The peer_static_public must be the known public key of the intended recipient.
     pub fn create_initiation_message(
         &mut self,
         peer_static_public: PublicKey,
@@ -124,6 +134,11 @@ impl WireGuardHandshake {
         }
     }
 
+    /// Processes an incoming initiation message (responder side of handshake).
+    /// This validates the message format, performs the corresponding cryptographic operations
+    /// to decrypt and verify the initiator's identity, and updates the handshake state.
+    /// Returns true if the message is valid and we can proceed to create a response.
+    /// The peer_static_public should be the known public key of the expected initiator.
     pub fn consume_initiation_message(
         &mut self,
         msg: &InitiationMessage,
@@ -208,6 +223,11 @@ impl WireGuardHandshake {
         true
     }
 
+    /// Creates the second message in the WireGuard handshake (responder -> initiator).
+    /// This can only be called after successfully consuming an initiation message.
+    /// Generates a new ephemeral keypair and performs additional Diffie-Hellman operations
+    /// to complete the key exchange. The encrypted_empty field proves we have the correct
+    /// shared secret without revealing additional information.
     pub fn create_response_message(&mut self) -> ResponseMessage {
         self.ephemeral_keys = Some(KeyPair::new());
         let ephemeral_keys = self.ephemeral_keys.as_ref().unwrap();
@@ -257,6 +277,11 @@ impl WireGuardHandshake {
         }
     }
 
+    /// Processes the response message to complete the handshake (initiator side).
+    /// This validates that the response corresponds to our initiation message by checking
+    /// the receiver_index matches our sender_index. Performs the final cryptographic
+    /// operations to establish the shared secret and verify the responder's authenticity.
+    /// Returns true if the handshake completed successfully.
     pub fn consume_response_message(&mut self, msg: &ResponseMessage) -> bool {
         // Verify message type
         if msg.message_type != RESPONSE_MESSAGE_TYPE {
@@ -312,6 +337,11 @@ impl WireGuardHandshake {
         true
     }
 
+    /// Derives the final transport keys from the completed handshake state.
+    /// This should only be called after a successful handshake completion.
+    /// Returns a tuple of (sending_key, receiving_key) that can be used for
+    /// encrypting/decrypting data packets. Both parties will derive identical keys
+    /// but use them in opposite directions (initiator's sending = responder's receiving).
     pub fn derive_keys(&self) -> (Vec<u8>, Vec<u8>) {
         let temp = hmac(&self.chaining_key, &[]);
         let key1 = hmac(&temp, &[&self.chaining_key[..], &[0x1]].concat());
@@ -321,6 +351,9 @@ impl WireGuardHandshake {
 }
 
 impl InitiationMessage {
+    /// Serializes the initiation message into the wire format for transmission.
+    /// The resulting byte array follows the WireGuard protocol specification
+    /// and will be exactly 148 bytes long.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.extend(self.message_type);
@@ -336,6 +369,9 @@ impl InitiationMessage {
 }
 
 impl ResponseMessage {
+    /// Serializes the response message into the wire format for transmission.
+    /// The resulting byte array follows the WireGuard protocol specification
+    /// and will be exactly 92 bytes long.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.extend(self.message_type);
