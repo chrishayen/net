@@ -16,15 +16,15 @@ WireGuard uses HKDF (with SHA-256) to derive multiple session keys (for encrypti
 
 ### [ ] Implement WireGuard handshake protocol (tokio, x25519-dalek, blake2, hkdf)
 #### Reqs
-        - [ ] static public private key pair w/ curve25519
-        - [ ] Swap static public keys
-        - [ ] Ephemeral public / private key pair
-        - [ ] Initiator timestamp
+        - [x] static public private key pair w/ curve25519
+        - [x] Swap static public keys
+        - [x] Ephemeral public / private key pair
+        - [x] Initiator timestamp
         
 ### Process
-        - [ ] Initiator generates ephemeral keys
-        - [ ] Computes shared secret w/ private + recipient's public
-        - [ ] Intiator chains shared secret into KDF (hkdf) to derive intermediate keys
+        - [x] Initiator generates ephemeral keys
+        - [x] Computes shared secret w/ private + recipient's public
+        - [x] Intiator chains shared secret into KDF (hkdf) to derive intermediate keys
 
 #### Initiator sends via udp
         - A message type identifier (indicating "Initiation").
