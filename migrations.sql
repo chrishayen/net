@@ -1,0 +1,1 @@
+CREATE TABLE node (id BIGSERIAL, name VARCHAR(255), public_key TEXT NOT NULL UNIQUE);
